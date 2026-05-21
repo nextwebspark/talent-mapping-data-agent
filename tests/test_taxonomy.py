@@ -8,9 +8,7 @@ def test_sectors_unique_and_nonempty():
 
 
 def test_adjacency_keys_match_sectors():
-    assert set(ADJACENCY.keys()) == set(SECTORS), (
-        "Every sector must have an adjacency entry"
-    )
+    assert set(ADJACENCY.keys()) == set(SECTORS), "Every sector must have an adjacency entry"
 
 
 def test_adjacency_values_are_taxonomy_sectors():

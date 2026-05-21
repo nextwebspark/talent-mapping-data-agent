@@ -98,6 +98,9 @@ def enrich_company_grounded(
     website: str | None = None,
     description: str | None = None,
     coarse_sector: str | None = None,
+    phone: str | None = None,
+    email: str | None = None,
+    address: str | None = None,
 ) -> dict[str, Any]:
     """Enrich a single company. Returns a dict matching EnrichmentResult.
 
@@ -107,6 +110,9 @@ def enrich_company_grounded(
         website: Optional website URL.
         description: Optional existing description from source data.
         coarse_sector: Optional existing coarse sector label from source data.
+        phone: Optional existing phone from source data (may be stale).
+        email: Optional existing email from source data (may be stale).
+        address: Optional existing address from source data (may be stale).
 
     Returns:
         Parsed + validated enrichment dict, with grounding URLs merged into
@@ -114,7 +120,16 @@ def enrich_company_grounded(
     """
     settings = load_settings()
     client = _client()
-    prompt = build_user_prompt(name, country, website, description, coarse_sector)
+    prompt = build_user_prompt(
+        name,
+        country,
+        website,
+        description,
+        coarse_sector,
+        phone=phone,
+        email=email,
+        address=address,
+    )
 
     config = GenerateContentConfig(
         system_instruction=system_instruction(),

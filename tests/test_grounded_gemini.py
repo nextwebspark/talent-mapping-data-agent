@@ -115,7 +115,7 @@ def test_enrich_company_grounded_wires_call(monkeypatch, sample_enrichment):
     monkeypatch.setattr(grounded_gemini, "_client", lambda: FakeClient())
 
     # Bypass tenacity retry sleep
-    result = grounded_gemini.enrich_company_grounded.retry.wait = lambda *a, **k: 0  # noqa: E731
+    grounded_gemini.enrich_company_grounded.retry.wait = lambda *a, **k: 0  # noqa: E731
 
     out = grounded_gemini.enrich_company_grounded(
         name="Emaar", country="UAE", website="https://emaar.com"

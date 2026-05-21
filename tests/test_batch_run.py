@@ -74,7 +74,7 @@ def test_run_writes_one_payload_per_company(mock_pipeline):
     assert rc == 0
     assert len(written) == len(rows)
     assert {p["company_id"] for p in written} == {"z-1", "z-2"}
-    assert all(p["prompt_version"] == "v1" for p in written)
+    assert all(p["prompt_version"] == "v3" for p in written)
     assert failures == []
 
 
@@ -124,8 +124,7 @@ def test_run_failure_continues_and_records(monkeypatch, sample_enrichment):
 
 def test_run_aborts_at_max_failures_before_stop(monkeypatch, sample_enrichment):
     rows = [
-        {"id": i, "company_id": f"z-{i}", "name": f"Bad{i}", "country": "UAE"}
-        for i in range(1, 6)
+        {"id": i, "company_id": f"z-{i}", "name": f"Bad{i}", "country": "UAE"} for i in range(1, 6)
     ]
     monkeypatch.setattr(batch_run, "fetch_unenriched_companies", lambda **kw: rows)
     monkeypatch.setattr(
@@ -147,6 +146,41 @@ def test_run_aborts_at_max_failures_before_stop(monkeypatch, sample_enrichment):
     assert rc == 1
     assert len(failures) == 2  # aborted after the 2nd failure
     assert written == []
+
+
+def test_run_passes_contact_hints_to_enricher(monkeypatch, sample_enrichment):
+    rows = [
+        {
+            "id": 1,
+            "company_id": "z-1",
+            "name": "ACME",
+            "country": "UAE",
+            "website": "https://acme.ae",
+            "description": "industrial",
+            "sector": "Industrial",
+            "top_company": True,
+            "phone": "+97141234567",
+            "email": "info@acme.ae",
+            "address": "P.O. Box 1234, Dubai",
+        }
+    ]
+    monkeypatch.setattr(batch_run, "fetch_unenriched_companies", lambda **kw: rows)
+
+    captured_kwargs: dict = {}
+
+    def fake_enrich(**kw):
+        captured_kwargs.update(kw)
+        return dict(sample_enrichment)
+
+    monkeypatch.setattr(batch_run, "enrich_company_grounded", fake_enrich)
+    monkeypatch.setattr(batch_run, "write_enrichment", lambda p: None)
+
+    rc = batch_run.run(**_default_kwargs())
+    assert rc == 0
+    assert captured_kwargs["phone"] == "+97141234567"
+    assert captured_kwargs["email"] == "info@acme.ae"
+    assert captured_kwargs["address"] == "P.O. Box 1234, Dubai"
+    assert captured_kwargs["website"] == "https://acme.ae"
 
 
 def test_run_passes_filters_through(monkeypatch, sample_enrichment):

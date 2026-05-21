@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-
 import pytest
 
 
@@ -14,7 +12,7 @@ def _stub_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
     monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "false")
     monkeypatch.setenv("ENRICHMENT_MODEL", "gemini-2.5-pro")
-    monkeypatch.setenv("PROMPT_VERSION", "v1")
+    monkeypatch.setenv("PROMPT_VERSION", "v3")
     # Reset cached supabase client between tests
     try:
         from tools.supabase_tool import _client
@@ -42,7 +40,13 @@ def sample_company() -> dict:
 def sample_enrichment() -> dict:
     return {
         "primary_sector": "Real Estate Development",
-        "sector_tags": ["Real Estate Development", "luxury-residential"],
+        "sector_mix": [
+            {"sector": "Real Estate Development", "weight": "dominant"},
+            {"sector": "Hospitality, Travel & Tourism", "weight": "minor"},
+        ],
+        "sub_tags": ["luxury-residential", "master-planned-communities"],
+        "proposed_tags": [],
+        "keywords": ["pan-gcc", "publicly-listed", "branded-developer"],
         "adjacent_sectors": [
             "Construction & Engineering",
             "Hospitality, Travel & Tourism",
