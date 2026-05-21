@@ -2,6 +2,30 @@
 -- company_id is the Zawya identifier; we dedupe per Zawya company, not per
 -- companies.id (since the same company_id can appear under multiple sectors).
 
+-- Live-DB migration (idempotent) for contact fields added in prompt_version v2:
+alter table if exists public.company_enrichment
+  add column if not exists website text,
+  add column if not exists phone text,
+  add column if not exists email text,
+  add column if not exists address text;
+
+-- Live-DB migration (idempotent) for v3 sector model:
+--   sector_mix     : qualitative ops weights [{"sector":"...","weight":"dominant|significant|minor"}]
+--   sub_tags       : controlled sub-niche tags (from src/agent/subtags.py, closed list)
+--   proposed_tags  : Gemini-suggested new sub-tags (escape valve, for human review)
+--   keywords       : free-flow descriptors (informational; future embedding similarity)
+alter table if exists public.company_enrichment
+  add column if not exists sector_mix jsonb not null default '[]'::jsonb,
+  add column if not exists sub_tags text[] not null default '{}',
+  add column if not exists proposed_tags text[] not null default '{}',
+  add column if not exists keywords text[] not null default '{}';
+
+create index if not exists company_enrichment_sub_tags_gin
+  on public.company_enrichment using gin (sub_tags);
+
+create index if not exists company_enrichment_sector_mix_gin
+  on public.company_enrichment using gin (sector_mix jsonb_path_ops);
+
 create table if not exists public.company_enrichment (
   id bigserial primary key,
   company_pk bigint not null references public.companies(id) on delete cascade,
@@ -17,6 +41,10 @@ create table if not exists public.company_enrichment (
   revenue_estimate_usd bigint,
   is_listed boolean,
   hq_city text,
+  website text,
+  phone text,
+  email text,
+  address text,
   confidence numeric(3,2) not null,
   sources jsonb not null default '[]'::jsonb,
   model text not null,

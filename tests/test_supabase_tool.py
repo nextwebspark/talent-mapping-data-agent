@@ -73,9 +73,7 @@ class EnrichmentTable:
         return _result(self._parent.enriched_rows)
 
     def upsert(self, payload, on_conflict=None):
-        self._parent.upsert_capture.append(
-            {"payload": payload, "on_conflict": on_conflict}
-        )
+        self._parent.upsert_capture.append({"payload": payload, "on_conflict": on_conflict})
         return _ExecResult([payload])
 
 
@@ -159,36 +157,117 @@ def fake_client_factory(monkeypatch):
 
 def test_build_enrichment_payload_maps_fields(sample_company, sample_enrichment):
     payload = supabase_tool.build_enrichment_payload(
-        sample_company, sample_enrichment, model="gemini-2.5-pro", prompt_version="v1"
+        sample_company, sample_enrichment, model="gemini-2.5-pro", prompt_version="v3"
     )
     assert payload["company_pk"] == sample_company["id"]
     assert payload["company_id"] == sample_company["company_id"]
     assert payload["primary_sector"] == "Real Estate Development"
-    assert payload["sector_tags"] == sample_enrichment["sector_tags"]
+    # legacy sector_tags mirrors sub_tags for back-compat
+    assert payload["sector_tags"] == sample_enrichment["sub_tags"]
+    assert payload["sub_tags"] == sample_enrichment["sub_tags"]
+    assert payload["proposed_tags"] == sample_enrichment["proposed_tags"]
+    assert payload["keywords"] == sample_enrichment["keywords"]
+    assert payload["sector_mix"] == sample_enrichment["sector_mix"]
     assert payload["adjacent_sectors"] == sample_enrichment["adjacent_sectors"]
     assert payload["confidence"] == 0.92
     assert payload["model"] == "gemini-2.5-pro"
-    assert payload["prompt_version"] == "v1"
+    assert payload["prompt_version"] == "v3"
     assert payload["raw_response"] == sample_enrichment
 
 
 def test_build_enrichment_payload_defaults_for_missing(sample_company):
     minimal = {"primary_sector": "Insurance", "confidence": 0.3}
     payload = supabase_tool.build_enrichment_payload(
-        sample_company, minimal, model="gemini-2.5-pro", prompt_version="v1"
+        sample_company, minimal, model="gemini-2.5-pro", prompt_version="v3"
     )
     assert payload["sector_tags"] == []
+    assert payload["sub_tags"] == []
+    assert payload["proposed_tags"] == []
+    assert payload["keywords"] == []
+    assert payload["sector_mix"] == []
     assert payload["adjacent_sectors"] == []
     assert payload["sources"] == []
     assert payload["tagline"] is None
     assert payload["revenue_estimate_usd"] is None
+    assert payload["website"] is None
+    assert payload["phone"] is None
+    assert payload["email"] is None
+    assert payload["address"] is None
+
+
+def test_build_enrichment_payload_legacy_sector_tags_mirrors_sub_tags(sample_company):
+    """v3 rows must populate legacy `sector_tags` (NOT NULL) with sub_tags content."""
+    enrichment = {
+        "primary_sector": "Retail & Consumer Goods",
+        "confidence": 0.8,
+        "sub_tags": ["luxury-retail", "jewelry-watches"],
+    }
+    payload = supabase_tool.build_enrichment_payload(
+        sample_company, enrichment, model="gemini-2.5-pro", prompt_version="v3"
+    )
+    assert payload["sector_tags"] == ["luxury-retail", "jewelry-watches"]
+    assert payload["sub_tags"] == ["luxury-retail", "jewelry-watches"]
+
+
+def test_build_enrichment_payload_legacy_sector_tags_explicit_override(sample_company):
+    """If caller passes explicit `sector_tags`, respect it (back-compat path)."""
+    enrichment = {
+        "primary_sector": "Retail & Consumer Goods",
+        "confidence": 0.8,
+        "sub_tags": ["luxury-retail"],
+        "sector_tags": ["legacy-explicit"],
+    }
+    payload = supabase_tool.build_enrichment_payload(
+        sample_company, enrichment, model="gemini-2.5-pro", prompt_version="v3"
+    )
+    assert payload["sector_tags"] == ["legacy-explicit"]
+    assert payload["sub_tags"] == ["luxury-retail"]
+
+
+def test_build_enrichment_payload_maps_contact_fields(sample_company):
+    enrichment = {
+        "primary_sector": "Real Estate Development",
+        "confidence": 0.85,
+        "website": "https://acme.ae",
+        "phone": "+97141234567",
+        "email": "info@acme.ae",
+        "address": "P.O. Box 1234, Dubai",
+    }
+    payload = supabase_tool.build_enrichment_payload(
+        sample_company, enrichment, model="gemini-2.5-pro", prompt_version="v2"
+    )
+    assert payload["website"] == "https://acme.ae"
+    assert payload["phone"] == "+97141234567"
+    assert payload["email"] == "info@acme.ae"
+    assert payload["address"] == "P.O. Box 1234, Dubai"
 
 
 def test_fetch_unenriched_dedupes_by_company_id(fake_client_factory):
     rows = [
-        {"id": 1, "company_id": "z-1", "name": "A", "country": "UAE", "sector": "Retail", "top_company": True},
-        {"id": 2, "company_id": "z-1", "name": "A", "country": "UAE", "sector": "Utility", "top_company": True},
-        {"id": 3, "company_id": "z-2", "name": "B", "country": "UAE", "sector": "Retail", "top_company": False},
+        {
+            "id": 1,
+            "company_id": "z-1",
+            "name": "A",
+            "country": "UAE",
+            "sector": "Retail",
+            "top_company": True,
+        },
+        {
+            "id": 2,
+            "company_id": "z-1",
+            "name": "A",
+            "country": "UAE",
+            "sector": "Utility",
+            "top_company": True,
+        },
+        {
+            "id": 3,
+            "company_id": "z-2",
+            "name": "B",
+            "country": "UAE",
+            "sector": "Retail",
+            "top_company": False,
+        },
     ]
     fake_client_factory(companies_rows=rows, enriched_rows=[])
     out = supabase_tool.fetch_unenriched_companies(limit=10, country="UAE")
@@ -197,9 +276,30 @@ def test_fetch_unenriched_dedupes_by_company_id(fake_client_factory):
 
 def test_fetch_unenriched_skips_already_enriched(fake_client_factory):
     rows = [
-        {"id": 1, "company_id": "z-1", "name": "A", "country": "UAE", "sector": "Retail", "top_company": True},
-        {"id": 2, "company_id": "z-2", "name": "B", "country": "UAE", "sector": "Retail", "top_company": False},
-        {"id": 3, "company_id": "z-3", "name": "C", "country": "UAE", "sector": "Utility", "top_company": False},
+        {
+            "id": 1,
+            "company_id": "z-1",
+            "name": "A",
+            "country": "UAE",
+            "sector": "Retail",
+            "top_company": True,
+        },
+        {
+            "id": 2,
+            "company_id": "z-2",
+            "name": "B",
+            "country": "UAE",
+            "sector": "Retail",
+            "top_company": False,
+        },
+        {
+            "id": 3,
+            "company_id": "z-3",
+            "name": "C",
+            "country": "UAE",
+            "sector": "Utility",
+            "top_company": False,
+        },
     ]
     fake_client_factory(companies_rows=rows, enriched_rows=[{"company_id": "z-2"}])
     out = supabase_tool.fetch_unenriched_companies(limit=10)
@@ -225,9 +325,30 @@ def test_fetch_unenriched_respects_limit(fake_client_factory):
 
 def test_fetch_unenriched_filters_by_sector(fake_client_factory):
     rows = [
-        {"id": 1, "company_id": "z-1", "name": "A", "country": "UAE", "sector": "Retail", "top_company": False},
-        {"id": 2, "company_id": "z-2", "name": "B", "country": "UAE", "sector": "Utility", "top_company": False},
-        {"id": 3, "company_id": "z-3", "name": "C", "country": "UAE", "sector": "Retail", "top_company": False},
+        {
+            "id": 1,
+            "company_id": "z-1",
+            "name": "A",
+            "country": "UAE",
+            "sector": "Retail",
+            "top_company": False,
+        },
+        {
+            "id": 2,
+            "company_id": "z-2",
+            "name": "B",
+            "country": "UAE",
+            "sector": "Utility",
+            "top_company": False,
+        },
+        {
+            "id": 3,
+            "company_id": "z-3",
+            "name": "C",
+            "country": "UAE",
+            "sector": "Retail",
+            "top_company": False,
+        },
     ]
     fake_client_factory(companies_rows=rows, enriched_rows=[])
     out = supabase_tool.fetch_unenriched_companies(limit=10, sector="Retail")
@@ -236,9 +357,30 @@ def test_fetch_unenriched_filters_by_sector(fake_client_factory):
 
 def test_fetch_unenriched_top_company_only(fake_client_factory):
     rows = [
-        {"id": 1, "company_id": "z-1", "name": "A", "country": "UAE", "sector": "Retail", "top_company": True},
-        {"id": 2, "company_id": "z-2", "name": "B", "country": "UAE", "sector": "Retail", "top_company": False},
-        {"id": 3, "company_id": "z-3", "name": "C", "country": "UAE", "sector": "Retail", "top_company": True},
+        {
+            "id": 1,
+            "company_id": "z-1",
+            "name": "A",
+            "country": "UAE",
+            "sector": "Retail",
+            "top_company": True,
+        },
+        {
+            "id": 2,
+            "company_id": "z-2",
+            "name": "B",
+            "country": "UAE",
+            "sector": "Retail",
+            "top_company": False,
+        },
+        {
+            "id": 3,
+            "company_id": "z-3",
+            "name": "C",
+            "country": "UAE",
+            "sector": "Retail",
+            "top_company": True,
+        },
     ]
     fake_client_factory(companies_rows=rows, enriched_rows=[])
     out = supabase_tool.fetch_unenriched_companies(limit=10, top_company_only=True)
@@ -247,38 +389,51 @@ def test_fetch_unenriched_top_company_only(fake_client_factory):
 
 def test_fetch_unenriched_skips_poison_pill(fake_client_factory):
     rows = [
-        {"id": 1, "company_id": "z-1", "name": "A", "country": "UAE", "sector": "Retail", "top_company": False},
-        {"id": 2, "company_id": "z-2", "name": "B", "country": "UAE", "sector": "Retail", "top_company": False},
+        {
+            "id": 1,
+            "company_id": "z-1",
+            "name": "A",
+            "country": "UAE",
+            "sector": "Retail",
+            "top_company": False,
+        },
+        {
+            "id": 2,
+            "company_id": "z-2",
+            "name": "B",
+            "country": "UAE",
+            "sector": "Retail",
+            "top_company": False,
+        },
     ]
-    # z-1 has 3 failures at v1 -> should be skipped at threshold=3
+    # z-1 has 3 failures at current version -> should be skipped at threshold=3
     failure_rows = [
-        {"company_id": "z-1", "prompt_version": "v1"},
-        {"company_id": "z-1", "prompt_version": "v1"},
-        {"company_id": "z-1", "prompt_version": "v1"},
+        {"company_id": "z-1", "prompt_version": "v3"},
+        {"company_id": "z-1", "prompt_version": "v3"},
+        {"company_id": "z-1", "prompt_version": "v3"},
     ]
-    fake_client_factory(
-        companies_rows=rows, enriched_rows=[], failure_rows=failure_rows
-    )
-    out = supabase_tool.fetch_unenriched_companies(
-        limit=10, max_failures_per_row=3
-    )
+    fake_client_factory(companies_rows=rows, enriched_rows=[], failure_rows=failure_rows)
+    out = supabase_tool.fetch_unenriched_companies(limit=10, max_failures_per_row=3)
     assert [r["company_id"] for r in out] == ["z-2"]
 
 
 def test_fetch_unenriched_keeps_row_below_failure_threshold(fake_client_factory):
     rows = [
-        {"id": 1, "company_id": "z-1", "name": "A", "country": "UAE", "sector": "Retail", "top_company": False},
+        {
+            "id": 1,
+            "company_id": "z-1",
+            "name": "A",
+            "country": "UAE",
+            "sector": "Retail",
+            "top_company": False,
+        },
     ]
     failure_rows = [
-        {"company_id": "z-1", "prompt_version": "v1"},
-        {"company_id": "z-1", "prompt_version": "v1"},
+        {"company_id": "z-1", "prompt_version": "v3"},
+        {"company_id": "z-1", "prompt_version": "v3"},
     ]
-    fake_client_factory(
-        companies_rows=rows, enriched_rows=[], failure_rows=failure_rows
-    )
-    out = supabase_tool.fetch_unenriched_companies(
-        limit=10, max_failures_per_row=3
-    )
+    fake_client_factory(companies_rows=rows, enriched_rows=[], failure_rows=failure_rows)
+    out = supabase_tool.fetch_unenriched_companies(limit=10, max_failures_per_row=3)
     assert [r["company_id"] for r in out] == ["z-1"]
 
 
@@ -329,14 +484,10 @@ def test_write_failure_increments_attempt(fake_client_factory, sample_company):
 
 
 def test_write_failure_truncates_long_messages(fake_client_factory, sample_company):
-    _, _, failure_captured = fake_client_factory(
-        companies_rows=[], enriched_rows=[]
-    )
+    _, _, failure_captured = fake_client_factory(companies_rows=[], enriched_rows=[])
     big = "x" * 5000
     err = RuntimeError(big)
-    supabase_tool.write_failure(
-        sample_company, err, prompt_version="v1", raw_response=big
-    )
+    supabase_tool.write_failure(sample_company, err, prompt_version="v1", raw_response=big)
     row = failure_captured[0]
     assert len(row["error_message"]) <= 2000
     assert len(row["raw_response"]) <= 5000

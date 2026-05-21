@@ -74,6 +74,9 @@ def run(
                 website=row.get("website"),
                 description=row.get("description"),
                 coarse_sector=row.get("sector"),
+                phone=row.get("phone"),
+                email=row.get("email"),
+                address=row.get("address"),
             )
             sector_counts[result["primary_sector"]] += 1
             if result.get("confidence", 0) < 0.5:
@@ -95,10 +98,7 @@ def run(
                     write_failure(row, exc, settings.prompt_version)
                 except Exception:
                     log.exception("Also failed to record failure for %s", name)
-            if (
-                max_failures_before_stop is not None
-                and failed >= max_failures_before_stop
-            ):
+            if max_failures_before_stop is not None and failed >= max_failures_before_stop:
                 log.error(
                     "Reached max_failures_before_stop=%d; aborting batch.",
                     max_failures_before_stop,
@@ -108,9 +108,7 @@ def run(
         if sleep_s and i < len(rows):
             time.sleep(sleep_s)
 
-    log.info(
-        "Done. enriched=%d failed=%d low_confidence=%d", enriched, failed, low_confidence
-    )
+    log.info("Done. enriched=%d failed=%d low_confidence=%d", enriched, failed, low_confidence)
     log.info("Sector distribution: %s", dict(sector_counts.most_common()))
     return 0 if failed == 0 else 1
 

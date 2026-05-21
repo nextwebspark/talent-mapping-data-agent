@@ -49,7 +49,8 @@ def fetch_unenriched_companies(
             failures at the current prompt_version (poison pill protection).
 
     Returns:
-        List of {id, company_id, name, country, website, description, sector, top_company}.
+        List of {id, company_id, name, country, website, description, sector,
+        top_company, phone, email, address}.
     """
     settings = load_settings()
     version = prompt_version or settings.prompt_version
@@ -64,13 +65,14 @@ def fetch_unenriched_companies(
     enriched_ids = {row["company_id"] for row in (enriched.data or [])}
 
     failure_counts = _failure_counts_by_company(version)
-    poison_ids = {
-        cid for cid, count in failure_counts.items() if count >= max_failures_per_row
-    }
+    poison_ids = {cid for cid, count in failure_counts.items() if count >= max_failures_per_row}
 
     query = (
         client.table("companies")
-        .select("id, company_id, name, country, website, description, sector, top_company")
+        .select(
+            "id, company_id, name, country, website, description, sector, "
+            "top_company, phone, email, address"
+        )
         .order("top_company", desc=True)
         .order("id", desc=False)
     )
@@ -178,11 +180,20 @@ def build_enrichment_payload(
     prompt_version: str,
 ) -> dict[str, Any]:
     """Map an EnrichmentResult dict + source company row into a DB payload."""
+    sub_tags = enrichment.get("sub_tags") or []
+    # sector_tags is the legacy v1/v2 array column (NOT NULL). For v3+, mirror
+    # sub_tags into it so downstream queries written against the old column
+    # name keep working until they migrate.
+    legacy_sector_tags = enrichment.get("sector_tags") or sub_tags
     return {
         "company_pk": company_row["id"],
         "company_id": company_row["company_id"],
         "primary_sector": enrichment["primary_sector"],
-        "sector_tags": enrichment.get("sector_tags") or [],
+        "sector_tags": legacy_sector_tags,
+        "sub_tags": sub_tags,
+        "proposed_tags": enrichment.get("proposed_tags") or [],
+        "keywords": enrichment.get("keywords") or [],
+        "sector_mix": enrichment.get("sector_mix") or [],
         "adjacent_sectors": enrichment.get("adjacent_sectors") or [],
         "tagline": enrichment.get("tagline"),
         "business_description": enrichment.get("business_description"),
@@ -192,6 +203,10 @@ def build_enrichment_payload(
         "revenue_estimate_usd": enrichment.get("revenue_estimate_usd"),
         "is_listed": enrichment.get("is_listed"),
         "hq_city": enrichment.get("hq_city"),
+        "website": enrichment.get("website"),
+        "phone": enrichment.get("phone"),
+        "email": enrichment.get("email"),
+        "address": enrichment.get("address"),
         "confidence": enrichment["confidence"],
         "sources": enrichment.get("sources") or [],
         "model": model,

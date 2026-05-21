@@ -30,9 +30,11 @@ Layer 4 — 4-dimension candidate scoring                            [not built]
 ```
 
 The enrichment data is consumed by the universe builder via SQL (no LLM at universe time):
-- Primary sector match: `e.primary_sector = ANY(mandate.direct)`
-- Adjacent expansion: `e.adjacent_sectors && mandate.adjacent` (GIN-indexed array overlap)
-- Free-form tag match: `e.sector_tags && ARRAY['fintech-lending', ...]`
+- Primary sector match (denormalized): `e.primary_sector = ANY(mandate.direct)`
+- Multi-sector ops match (v3): `e.sector_mix @? '$[*] ? (@.sector == "Real Estate Development")'`
+- Dominant-only match (v3): `e.sector_mix @? '$[*] ? (@.sector == "Real Estate Development" && @.weight == "dominant")'`
+- Sub-tag overlap (v3, controlled vocab): `e.sub_tags && ARRAY['fintech-lending', 'sme-lending']`
+- Talent adjacency expansion: `e.adjacent_sectors && mandate.adjacent` (GIN-indexed array overlap)
 - Filtering: `employee_band`, `revenue_band`, `is_listed`, `country`, `confidence >= 0.5`
 
 Vector DB is **NOT used yet**. SQL + GIN array indexes handle MVP. When semantic mandate-to-company matching is needed, add `pgvector` extension to the same Supabase Postgres and an `embedding vector(768)` column on `company_enrichment`. Do not introduce Qdrant/Pinecone unless scale demands it.
@@ -56,6 +58,7 @@ Vector DB is **NOT used yet**. SQL + GIN array indexes handle MVP. When semantic
 │   ├── config.py                          # env loading (Pydantic-free dataclass)
 │   ├── agent/
 │   │   ├── taxonomy.py                    # SECTORS (20), ADJACENCY map, EMPLOYEE_BANDS, REVENUE_BANDS
+│   │   ├── subtags.py                     # SUB_TAGS_BY_SECTOR controlled vocab (~246), SUB_TAGS set
 │   │   ├── prompts.py                     # PROMPT_VERSION, EnrichmentResult schema, system_instruction()
 │   │   └── enrichment_agent.py            # ADK root_agent (interactive use; not used for bulk)
 │   ├── tools/
@@ -65,9 +68,10 @@ Vector DB is **NOT used yet**. SQL + GIN array indexes handle MVP. When semantic
 │   │   └── batch_run.py                   # CLI workflow (deterministic loop) — primary bulk path
 │   └── deploy/
 │       └── vertex_deploy.py               # AdkApp wrapper + Vertex Agent Engine create/update/list/delete
-└── tests/                                 # 31 passing unit tests, no API keys needed
+└── tests/                                 # unit tests, no API keys needed
     ├── conftest.py                        # env stubs + sample fixtures
     ├── test_taxonomy.py
+    ├── test_subtags.py                    # vocab integrity (kebab-case, no dups, sector keys)
     ├── test_prompts.py
     ├── test_grounded_gemini.py
     ├── test_supabase_tool.py
@@ -84,10 +88,17 @@ Vector DB is **NOT used yet**. SQL + GIN array indexes handle MVP. When semantic
 - Dedupe key: `(company_id, prompt_version)`. **We enrich once per Zawya `company_id`, NOT once per `companies.id` row.** This is intentional — the same company appearing under multiple sectors should not be enriched multiple times.
 - `company_pk` is a denormalized FK to one of the matching `companies.id` rows (lowest id, preferring `top_company=true`).
 - `primary_sector` is constrained at the application layer to be one of `SECTORS` (no DB enum — easier to evolve taxonomy).
-- `sector_tags`, `adjacent_sectors`: `text[]` with GIN indexes for fast overlap queries.
+- **v3 sector model**:
+  - `sector_mix` (jsonb, GIN `jsonb_path_ops`-indexed): qualitative ops breakdown. Array of `{sector, weight}` where `weight ∈ {dominant, significant, minor}`. At least one entry is `dominant` and matches `primary_sector`. Max 5 entries.
+  - `sub_tags` (text[], GIN-indexed): controlled-vocabulary sub-niche tags drawn from [src/agent/subtags.py](src/agent/subtags.py) (~246 entries, 20 sectors). Invalid entries returned by Gemini are auto-moved to `proposed_tags` by the Pydantic `model_validator` in `EnrichmentResult`.
+  - `proposed_tags` (text[]): escape valve for Gemini-suggested sub-tags missing from the controlled vocab. NOT used for filtering. Periodically reviewed → frequent suggestions promoted into `SUB_TAGS_BY_SECTOR` and `PROMPT_VERSION` bumped.
+  - `keywords` (text[]): free-flow descriptors (brands owned, geographies, business models). Informational only; future embedding-similarity fallback.
+  - `sector_tags` (text[]): legacy v1/v2 column. From v3 onward it mirrors `sub_tags` for back-compat. New consumers should use `sub_tags` directly.
+- `adjacent_sectors` (text[], GIN-indexed): taxonomy sectors where talent could realistically move (talent adjacency, not business-model adjacency).
+- Contact fields (v2+): `website`, `phone`, `email`, `address` (text). LLM-enriched with `sources[]` citation requirement; Pydantic validator flattens dict/list responses to a single string.
 - `confidence`: 0.0–1.0. Downstream queries should filter `>= 0.5` for usable rows.
 - `sources`: JSONB array of `{url, title, snippet}` from Gemini grounding metadata.
-- `model`, `prompt_version`: versioning. Bump `PROMPT_VERSION` in `src/agent/prompts.py` when the prompt or schema changes; old + new versions coexist.
+- `model`, `prompt_version`: versioning. Bump `PROMPT_VERSION` in `src/agent/prompts.py` when the prompt or schema changes; old + new versions coexist. **Current: v3**.
 - `raw_response`: full LLM JSON for audit/debug.
 
 **Failure log table** (`public.company_enrichment_failures`) — defined in [doc/supabase-schema/company_enrichment_failures.sql](doc/supabase-schema/company_enrichment_failures.sql):
@@ -95,11 +106,15 @@ Vector DB is **NOT used yet**. SQL + GIN array indexes handle MVP. When semantic
 - Columns: `company_pk`, `company_id`, `prompt_version`, `attempt`, `error_class`, `error_message`, `raw_response`, `failed_at`.
 - Used for: audit trail, poison-pill skip (rows with ≥ `max_failures_per_row` failures are excluded from `fetch_unenriched_companies`).
 
-## Taxonomy (20 sectors)
+## Taxonomy (20 sectors) + Controlled Sub-tag Vocabulary
 
 Defined in [src/agent/taxonomy.py](src/agent/taxonomy.py). UAE/GCC-flavored. Every sector has an entry in `ADJACENCY` (recruiter-perspective talent adjacency, not business-model adjacency).
 
-Hard validation: `primary_sector` must be one of `SECTORS`. `adjacent_sectors` entries must also be from `SECTORS`. `sector_tags` is the only place where free-form sub-tags (e.g. `fintech-lending`, `cold-chain-logistics`) are allowed.
+Hard validation: `primary_sector` must be one of `SECTORS`. `adjacent_sectors` entries must also be from `SECTORS`. `sector_mix[].sector` must also be from `SECTORS`.
+
+**Sub-tag vocabulary** ([src/agent/subtags.py](src/agent/subtags.py)): closed list of ~246 kebab-case sub-niches grouped by sector. `sub_tags` returned by Gemini must come from this list; out-of-vocab entries are auto-moved to `proposed_tags` and Gemini is told via prompt to use `proposed_tags` for suggestions. Brief parsing (Layer 1) must draw `mandate.sub_tags` from the SAME list so universe-builder array overlap works without vocab drift.
+
+**Promotion loop**: periodically inspect `company_enrichment.proposed_tags` aggregates. Promote frequent + meaningful candidates by adding them to `SUB_TAGS_BY_SECTOR` and bumping `PROMPT_VERSION`.
 
 ## Enrichment Workflow (current bulk path)
 
