@@ -1,0 +1,139 @@
+# ---------------------------------------------------------------------------
+# Secrets / credentials — NEVER commit
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.env.local
+
+# Google Cloud / Vertex AI service account keys
+*-service-account*.json
+*-credentials*.json
+*-sa-key*.json
+gcp-key*.json
+service_account*.json
+application_default_credentials.json
+.gcloud/
+.gcp/
+
+# Supabase / generic API keys
+.supabase/
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+secrets/
+secret.*
+*.secret
+
+# AWS
+.aws/
+aws-credentials
+credentials
+
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+*.egg
+dist/
+build/
+develop-eggs/
+eggs/
+.eggs/
+parts/
+sdist/
+wheels/
+share/python-wheels/
+MANIFEST
+
+# Virtual envs
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# uv
+.uv-cache/
+uv.lock.bak
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
+
+# Linters
+.ruff_cache/
+.mypy_cache/
+.pyre/
+.pytype/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+profile_default/
+ipython_config.py
+
+# ---------------------------------------------------------------------------
+# Editors / IDEs
+# ---------------------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+.DS_Store
+Thumbs.db
+
+# ---------------------------------------------------------------------------
+# Logs / runtime outputs
+# ---------------------------------------------------------------------------
+*.log
+logs/
+out/
+output/
+tmp/
+temp/
+*.pid
+*.sock
+
+# Data dumps that may contain real company / candidate records
+*.csv
+*.tsv
+*.parquet
+*.jsonl
+*.dump
+*.sql.gz
+data/
+exports/
+
+# Keep schema SQL committed
+!doc/supabase-schema/*.sql
+
+# ---------------------------------------------------------------------------
+# Misc
+# ---------------------------------------------------------------------------
+.cache/
+node_modules/
+
+# Claude Code / agent state
+.claude/
+CLAUDE.local.md
+.plans/
