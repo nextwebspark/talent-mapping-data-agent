@@ -1,21 +1,34 @@
 """Supabase tools for fetching unenriched companies and writing enrichments.
 
-Dedup is by `company_id` (Zawya identifier), not `companies.id` - the same
-Zawya company can have multiple rows in `companies` (one per source sector).
-We enrich each Zawya company once per prompt_version; `company_pk` points to
-the first (lowest id) matching row.
+Dedup is by `slug` (from company_seed_list), treated as `company_id` in the
+enrichment table. A seed-list company can appear under multiple sectors; we
+enrich each (slug) once per prompt_version. `company_pk` holds the seed list
+row id (soft reference, no FK constraint).
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from functools import lru_cache
 from typing import Any, Callable
 
 from supabase import Client, create_client
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
+from agent.taxonomy import SECTORS
 from config import load_settings
+
+GCC_COUNTRIES: frozenset[str] = frozenset(
+    {
+        "United Arab Emirates",
+        "Saudi Arabia",
+        "Qatar",
+        "Kuwait",
+        "Bahrain",
+        "Oman",
+    }
+)
 
 log = logging.getLogger(__name__)
 
@@ -56,28 +69,32 @@ def fetch_unenriched_companies(
     prompt_version: str | None = None,
     max_failures_per_row: int = 3,
 ) -> list[dict[str, Any]]:
-    """Return up to `limit` companies that have no enrichment for the current
-    prompt_version.
+    """Return up to `limit` seed-list companies that have no enrichment for the
+    current prompt_version.
 
-    Dedupes by `company_id` so each Zawya company is enriched once. Prefers
-    rows with `top_company=true`, then lowest id.
+    Source table: company_seed_list (not companies). Dedupes by `slug` so each
+    company is enriched once even if it appears under multiple sectors. Each
+    returned row has a synthetic `company_id` key set to the row's slug.
 
     Args:
         limit: Max rows.
-        country: Optional country filter (exact match on companies.country).
-        sector: Optional source-sector filter (exact match on companies.sector).
-        top_company_only: If True, only return rows with top_company=true.
+        country: Optional country filter (exact match on company_seed_list.country).
+        sector: Optional sector filter (exact match on company_seed_list.sector).
+        top_company_only: Ignored — company_seed_list has no top_company field.
         prompt_version: If None, uses settings.prompt_version.
         max_failures_per_row: Skip rows that have >= this many recorded
             failures at the current prompt_version (poison pill protection).
 
     Returns:
-        List of {id, company_id, name, country, website, description, sector,
-        top_company, phone, email, address}.
+        List of {id, company_id, name, slug, country, sector, website, description}.
+        `company_id` equals `slug`.
     """
     settings = load_settings()
     version = prompt_version or settings.prompt_version
     client = _client()
+
+    if top_company_only:
+        log.warning("top_company_only ignored: company_seed_list has no top_company field")
 
     enriched_rows = _select_all(
         lambda: client.table("company_enrichment")
@@ -89,37 +106,32 @@ def fetch_unenriched_companies(
     failure_counts = _failure_counts_by_company(version)
     poison_ids = {cid for cid, count in failure_counts.items() if count >= max_failures_per_row}
 
-    def _make_companies_query() -> Any:
+    def _make_seed_query() -> Any:
         q = (
-            client.table("companies")
-            .select(
-                "id, company_id, name, country, website, description, sector, "
-                "top_company, phone, email, address"
-            )
-            .order("top_company", desc=True)
+            client.table("company_seed_list")
+            .select("id, name, slug, country, sector, website, description")
             .order("id", desc=False)
         )
         if country:
             q = q.eq("country", country)
         if sector:
             q = q.eq("sector", sector)
-        if top_company_only:
-            q = q.eq("top_company", True)
         return q
 
     rows: list[dict[str, Any]] = []
-    seen_company_ids: set[str] = set()
+    seen_slugs: set[str] = set()
     offset = 0
     while len(rows) < limit:
-        page = _make_companies_query().range(offset, offset + _PAGE_SIZE - 1).execute()
+        page = _make_seed_query().range(offset, offset + _PAGE_SIZE - 1).execute()
         data = page.data or []
         if not data:
             break
         for row in data:
-            cid = row["company_id"]
-            if cid in enriched_ids or cid in seen_company_ids or cid in poison_ids:
+            slug = row["slug"]
+            if slug in enriched_ids or slug in seen_slugs or slug in poison_ids:
                 continue
-            seen_company_ids.add(cid)
+            seen_slugs.add(slug)
+            row["company_id"] = slug
             rows.append(row)
             if len(rows) >= limit:
                 break
@@ -229,6 +241,9 @@ def build_enrichment_payload(
     return {
         "company_pk": company_row["id"],
         "company_id": company_row["company_id"],
+        "company_name": company_row.get("name", ""),
+        "slug": company_row.get("slug", ""),
+        "country": company_row.get("country", ""),
         "primary_sector": enrichment["primary_sector"],
         "sector_tags": legacy_sector_tags,
         "sub_tags": sub_tags,
@@ -254,3 +269,107 @@ def build_enrichment_payload(
         "prompt_version": prompt_version,
         "raw_response": enrichment,
     }
+
+
+_SLUG_NON_ALNUM = re.compile(r"[^a-z0-9]+")
+
+
+def slugify(name: str) -> str:
+    """Normalise a company name into a stable dedupe slug.
+
+    Lowercases, replaces runs of non-alphanumerics with single hyphens,
+    strips leading/trailing hyphens. Empty input returns empty string.
+    """
+    if not name:
+        return ""
+    slug = _SLUG_NON_ALNUM.sub("-", name.lower()).strip("-")
+    return slug
+
+
+def _normalise_seed_row(row: dict[str, Any], harvest_version: str) -> dict[str, Any] | None:
+    name = (row.get("name") or "").strip()
+    source_url = (row.get("source_url") or "").strip()
+    if not name or not source_url:
+        return None
+    sector = row.get("sector")
+    country = row.get("country")
+    if sector not in SECTORS:
+        raise ValueError(f"sector {sector!r} not in SECTORS taxonomy")
+    if country not in GCC_COUNTRIES:
+        raise ValueError(f"country {country!r} not in GCC_COUNTRIES")
+    slug = row.get("slug") or slugify(name)
+    if not slug:
+        return None
+    return {
+        "name": name,
+        "slug": slug,
+        "country": country,
+        "sector": sector,
+        "website": row.get("website"),
+        "description": row.get("description"),
+        "source_url": source_url,
+        "source_title": row.get("source_title"),
+        "source_query": row.get("source_query"),
+        "harvest_version": row.get("harvest_version") or harvest_version,
+        "raw_context": row.get("raw_context") or {},
+    }
+
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    retry=retry_if_exception_type(_TRANSIENT_WRITE_ERRORS),
+    reraise=True,
+)
+def write_seed_companies(
+    rows: list[dict[str, Any]],
+    harvest_version: str = "v1",
+) -> int:
+    """Upsert seed-list rows into company_seed_list.
+
+    Each row needs name, country, sector, source_url. slug auto-filled from
+    name if absent. Rows with empty name/source_url are silently dropped.
+    Invalid sector or country raises ValueError before any write.
+
+    Returns the number of rows actually sent to the upsert.
+    """
+    payloads = [
+        normalised
+        for row in rows
+        if (normalised := _normalise_seed_row(row, harvest_version)) is not None
+    ]
+    if not payloads:
+        return 0
+    client = _client()
+    client.table("company_seed_list").upsert(
+        payloads, on_conflict="slug,country,sector,harvest_version"
+    ).execute()
+    return len(payloads)
+
+
+def fetch_seed_count(country: str, sector: str, harvest_version: str = "v1") -> int:
+    """Count rows already harvested for a (country, sector, version) triple."""
+    client = _client()
+    rows = _select_all(
+        lambda: client.table("company_seed_list")
+        .select("id")
+        .eq("country", country)
+        .eq("sector", sector)
+        .eq("harvest_version", harvest_version)
+    )
+    return len(rows)
+
+
+def fetch_seed_slugs(
+    country: str, sector: str, harvest_version: str = "v1"
+) -> set[str]:
+    """Return the set of slugs already stored for in-session dedup."""
+    client = _client()
+    rows = _select_all(
+        lambda: client.table("company_seed_list")
+        .select("slug")
+        .eq("country", country)
+        .eq("sector", sector)
+        .eq("harvest_version", harvest_version)
+    )
+    return {r["slug"] for r in rows if r.get("slug")}

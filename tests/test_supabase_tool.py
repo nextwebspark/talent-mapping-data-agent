@@ -123,21 +123,21 @@ class FakeClient:
     def __init__(
         self,
         *,
-        companies_rows,
+        seed_rows,
         enriched_rows,
         failure_rows: list | None = None,
         upsert_capture: list,
         failure_insert_capture: list,
     ):
-        self.companies_rows = companies_rows
+        self.seed_rows = seed_rows
         self.enriched_rows = enriched_rows
         self.failure_rows = failure_rows or []
         self.upsert_capture = upsert_capture
         self.failure_insert_capture = failure_insert_capture
 
     def table(self, name):
-        if name == "companies":
-            return CompaniesQuery(self.companies_rows)
+        if name == "company_seed_list":
+            return CompaniesQuery(self.seed_rows)
         if name == "company_enrichment":
             return EnrichmentTable(self)
         if name == "company_enrichment_failures":
@@ -150,9 +150,9 @@ def fake_client_factory(monkeypatch):
     captured: list[dict] = []
     failure_captured: list[dict] = []
 
-    def _make(*, companies_rows, enriched_rows, failure_rows=None):
+    def _make(*, seed_rows=None, enriched_rows, failure_rows=None):
         client = FakeClient(
-            companies_rows=companies_rows,
+            seed_rows=seed_rows or [],
             enriched_rows=enriched_rows,
             failure_rows=failure_rows or [],
             upsert_capture=captured,
@@ -170,6 +170,9 @@ def test_build_enrichment_payload_maps_fields(sample_company, sample_enrichment)
     )
     assert payload["company_pk"] == sample_company["id"]
     assert payload["company_id"] == sample_company["company_id"]
+    assert payload["company_name"] == sample_company["name"]
+    assert payload["slug"] == sample_company["slug"]
+    assert payload["country"] == sample_company["country"]
     assert payload["primary_sector"] == "Real Estate Development"
     # legacy sector_tags mirrors sub_tags for back-compat
     assert payload["sector_tags"] == sample_enrichment["sub_tags"]
@@ -253,167 +256,63 @@ def test_build_enrichment_payload_maps_contact_fields(sample_company):
 
 def test_fetch_unenriched_dedupes_by_company_id(fake_client_factory):
     rows = [
-        {
-            "id": 1,
-            "company_id": "z-1",
-            "name": "A",
-            "country": "UAE",
-            "sector": "Retail",
-            "top_company": True,
-        },
-        {
-            "id": 2,
-            "company_id": "z-1",
-            "name": "A",
-            "country": "UAE",
-            "sector": "Utility",
-            "top_company": True,
-        },
-        {
-            "id": 3,
-            "company_id": "z-2",
-            "name": "B",
-            "country": "UAE",
-            "sector": "Retail",
-            "top_company": False,
-        },
+        {"id": 1, "slug": "z-1", "name": "A", "country": "UAE", "sector": "Retail"},
+        {"id": 2, "slug": "z-1", "name": "A", "country": "UAE", "sector": "Utility"},
+        {"id": 3, "slug": "z-2", "name": "B", "country": "UAE", "sector": "Retail"},
     ]
-    fake_client_factory(companies_rows=rows, enriched_rows=[])
+    fake_client_factory(seed_rows=rows, enriched_rows=[])
     out = supabase_tool.fetch_unenriched_companies(limit=10, country="UAE")
     assert [r["company_id"] for r in out] == ["z-1", "z-2"]
 
 
 def test_fetch_unenriched_skips_already_enriched(fake_client_factory):
     rows = [
-        {
-            "id": 1,
-            "company_id": "z-1",
-            "name": "A",
-            "country": "UAE",
-            "sector": "Retail",
-            "top_company": True,
-        },
-        {
-            "id": 2,
-            "company_id": "z-2",
-            "name": "B",
-            "country": "UAE",
-            "sector": "Retail",
-            "top_company": False,
-        },
-        {
-            "id": 3,
-            "company_id": "z-3",
-            "name": "C",
-            "country": "UAE",
-            "sector": "Utility",
-            "top_company": False,
-        },
+        {"id": 1, "slug": "z-1", "name": "A", "country": "UAE", "sector": "Retail"},
+        {"id": 2, "slug": "z-2", "name": "B", "country": "UAE", "sector": "Retail"},
+        {"id": 3, "slug": "z-3", "name": "C", "country": "UAE", "sector": "Utility"},
     ]
-    fake_client_factory(companies_rows=rows, enriched_rows=[{"company_id": "z-2"}])
+    fake_client_factory(seed_rows=rows, enriched_rows=[{"company_id": "z-2"}])
     out = supabase_tool.fetch_unenriched_companies(limit=10)
     assert [r["company_id"] for r in out] == ["z-1", "z-3"]
 
 
 def test_fetch_unenriched_respects_limit(fake_client_factory):
     rows = [
-        {
-            "id": i,
-            "company_id": f"z-{i}",
-            "name": f"N{i}",
-            "country": "UAE",
-            "sector": "Retail",
-            "top_company": False,
-        }
+        {"id": i, "slug": f"z-{i}", "name": f"N{i}", "country": "UAE", "sector": "Retail"}
         for i in range(1, 20)
     ]
-    fake_client_factory(companies_rows=rows, enriched_rows=[])
+    fake_client_factory(seed_rows=rows, enriched_rows=[])
     out = supabase_tool.fetch_unenriched_companies(limit=5)
     assert len(out) == 5
 
 
 def test_fetch_unenriched_filters_by_sector(fake_client_factory):
     rows = [
-        {
-            "id": 1,
-            "company_id": "z-1",
-            "name": "A",
-            "country": "UAE",
-            "sector": "Retail",
-            "top_company": False,
-        },
-        {
-            "id": 2,
-            "company_id": "z-2",
-            "name": "B",
-            "country": "UAE",
-            "sector": "Utility",
-            "top_company": False,
-        },
-        {
-            "id": 3,
-            "company_id": "z-3",
-            "name": "C",
-            "country": "UAE",
-            "sector": "Retail",
-            "top_company": False,
-        },
+        {"id": 1, "slug": "z-1", "name": "A", "country": "UAE", "sector": "Retail"},
+        {"id": 2, "slug": "z-2", "name": "B", "country": "UAE", "sector": "Utility"},
+        {"id": 3, "slug": "z-3", "name": "C", "country": "UAE", "sector": "Retail"},
     ]
-    fake_client_factory(companies_rows=rows, enriched_rows=[])
+    fake_client_factory(seed_rows=rows, enriched_rows=[])
     out = supabase_tool.fetch_unenriched_companies(limit=10, sector="Retail")
     assert [r["company_id"] for r in out] == ["z-1", "z-3"]
 
 
-def test_fetch_unenriched_top_company_only(fake_client_factory):
+def test_fetch_unenriched_top_company_only_ignored(fake_client_factory):
+    """top_company_only is a no-op for seed list; all rows returned with a warning."""
     rows = [
-        {
-            "id": 1,
-            "company_id": "z-1",
-            "name": "A",
-            "country": "UAE",
-            "sector": "Retail",
-            "top_company": True,
-        },
-        {
-            "id": 2,
-            "company_id": "z-2",
-            "name": "B",
-            "country": "UAE",
-            "sector": "Retail",
-            "top_company": False,
-        },
-        {
-            "id": 3,
-            "company_id": "z-3",
-            "name": "C",
-            "country": "UAE",
-            "sector": "Retail",
-            "top_company": True,
-        },
+        {"id": 1, "slug": "z-1", "name": "A", "country": "UAE", "sector": "Retail"},
+        {"id": 2, "slug": "z-2", "name": "B", "country": "UAE", "sector": "Retail"},
+        {"id": 3, "slug": "z-3", "name": "C", "country": "UAE", "sector": "Retail"},
     ]
-    fake_client_factory(companies_rows=rows, enriched_rows=[])
+    fake_client_factory(seed_rows=rows, enriched_rows=[])
     out = supabase_tool.fetch_unenriched_companies(limit=10, top_company_only=True)
-    assert [r["company_id"] for r in out] == ["z-1", "z-3"]
+    assert [r["company_id"] for r in out] == ["z-1", "z-2", "z-3"]
 
 
 def test_fetch_unenriched_skips_poison_pill(fake_client_factory):
     rows = [
-        {
-            "id": 1,
-            "company_id": "z-1",
-            "name": "A",
-            "country": "UAE",
-            "sector": "Retail",
-            "top_company": False,
-        },
-        {
-            "id": 2,
-            "company_id": "z-2",
-            "name": "B",
-            "country": "UAE",
-            "sector": "Retail",
-            "top_company": False,
-        },
+        {"id": 1, "slug": "z-1", "name": "A", "country": "UAE", "sector": "Retail"},
+        {"id": 2, "slug": "z-2", "name": "B", "country": "UAE", "sector": "Retail"},
     ]
     # z-1 has 3 failures at current version -> should be skipped at threshold=3
     failure_rows = [
@@ -421,33 +320,26 @@ def test_fetch_unenriched_skips_poison_pill(fake_client_factory):
         {"company_id": "z-1", "prompt_version": "v3"},
         {"company_id": "z-1", "prompt_version": "v3"},
     ]
-    fake_client_factory(companies_rows=rows, enriched_rows=[], failure_rows=failure_rows)
+    fake_client_factory(seed_rows=rows, enriched_rows=[], failure_rows=failure_rows)
     out = supabase_tool.fetch_unenriched_companies(limit=10, max_failures_per_row=3)
     assert [r["company_id"] for r in out] == ["z-2"]
 
 
 def test_fetch_unenriched_keeps_row_below_failure_threshold(fake_client_factory):
     rows = [
-        {
-            "id": 1,
-            "company_id": "z-1",
-            "name": "A",
-            "country": "UAE",
-            "sector": "Retail",
-            "top_company": False,
-        },
+        {"id": 1, "slug": "z-1", "name": "A", "country": "UAE", "sector": "Retail"},
     ]
     failure_rows = [
         {"company_id": "z-1", "prompt_version": "v3"},
         {"company_id": "z-1", "prompt_version": "v3"},
     ]
-    fake_client_factory(companies_rows=rows, enriched_rows=[], failure_rows=failure_rows)
+    fake_client_factory(seed_rows=rows, enriched_rows=[], failure_rows=failure_rows)
     out = supabase_tool.fetch_unenriched_companies(limit=10, max_failures_per_row=3)
     assert [r["company_id"] for r in out] == ["z-1"]
 
 
 def test_write_enrichment_upserts(fake_client_factory):
-    _, captured, _ = fake_client_factory(companies_rows=[], enriched_rows=[])
+    _, captured, _ = fake_client_factory(enriched_rows=[])
     payload = {
         "company_id": "z-1",
         "prompt_version": "v1",
@@ -462,7 +354,7 @@ def test_write_enrichment_upserts(fake_client_factory):
 
 def test_write_failure_first_attempt(fake_client_factory, sample_company):
     _, _, failure_captured = fake_client_factory(
-        companies_rows=[], enriched_rows=[], failure_rows=[]
+        enriched_rows=[], failure_rows=[]
     )
     err = ValueError("bad JSON from model")
     supabase_tool.write_failure(sample_company, err, prompt_version="v1")
@@ -483,7 +375,7 @@ def test_write_failure_increments_attempt(fake_client_factory, sample_company):
         {"company_id": sample_company["company_id"], "prompt_version": "v1"},
     ]
     _, _, failure_captured = fake_client_factory(
-        companies_rows=[], enriched_rows=[], failure_rows=failure_rows
+        enriched_rows=[], failure_rows=failure_rows
     )
     err = RuntimeError("boom")
     supabase_tool.write_failure(sample_company, err, prompt_version="v1")
@@ -493,10 +385,227 @@ def test_write_failure_increments_attempt(fake_client_factory, sample_company):
 
 
 def test_write_failure_truncates_long_messages(fake_client_factory, sample_company):
-    _, _, failure_captured = fake_client_factory(companies_rows=[], enriched_rows=[])
+    _, _, failure_captured = fake_client_factory(enriched_rows=[])
     big = "x" * 5000
     err = RuntimeError(big)
     supabase_tool.write_failure(sample_company, err, prompt_version="v1", raw_response=big)
     row = failure_captured[0]
     assert len(row["error_message"]) <= 2000
     assert len(row["raw_response"]) <= 5000
+
+
+# --- Seed-list helpers ------------------------------------------------------
+
+
+class SeedTable:
+    """Routes select/upsert for company_seed_list."""
+
+    def __init__(self, parent: "FakeSeedClient"):
+        self._parent = parent
+        self._filters: dict = {}
+
+    def select(self, *a, **kw):
+        new = SeedTable(self._parent)
+        new._filters = dict(self._filters)
+        return new
+
+    def eq(self, column, value):
+        new = SeedTable(self._parent)
+        new._filters = dict(self._filters)
+        new._filters[column] = value
+        return new
+
+    def _filtered_rows(self):
+        rows = self._parent.seed_rows
+        for col, val in self._filters.items():
+            rows = [r for r in rows if r.get(col) == val]
+        return rows
+
+    def range(self, start, end):
+        return _ExecResult(self._filtered_rows()[start : end + 1])
+
+    def execute(self):
+        return _result(self._filtered_rows())
+
+    def upsert(self, payload, on_conflict=None):
+        self._parent.upsert_capture.append({"payload": payload, "on_conflict": on_conflict})
+        return _ExecResult(payload if isinstance(payload, list) else [payload])
+
+
+class FakeSeedClient:
+    def __init__(self, *, seed_rows, upsert_capture):
+        self.seed_rows = seed_rows
+        self.upsert_capture = upsert_capture
+
+    def table(self, name):
+        if name == "company_seed_list":
+            return SeedTable(self)
+        raise AssertionError(f"unexpected table {name}")
+
+
+@pytest.fixture
+def fake_seed_client_factory(monkeypatch):
+    captured: list[dict] = []
+
+    def _make(*, seed_rows=None):
+        client = FakeSeedClient(seed_rows=seed_rows or [], upsert_capture=captured)
+        monkeypatch.setattr(supabase_tool, "_client", lambda: client)
+        return client, captured
+
+    return _make
+
+
+def test_slugify_handles_punctuation_and_case():
+    assert supabase_tool.slugify("Emaar Properties PJSC") == "emaar-properties-pjsc"
+    assert supabase_tool.slugify("  Al-Futtaim & Sons  ") == "al-futtaim-sons"
+    assert supabase_tool.slugify("ADNOC (Abu Dhabi)") == "adnoc-abu-dhabi"
+    assert supabase_tool.slugify("") == ""
+
+
+def test_write_seed_companies_upserts_with_slug_and_validates(fake_seed_client_factory):
+    _, captured = fake_seed_client_factory()
+    n = supabase_tool.write_seed_companies(
+        [
+            {
+                "name": "Emaar Properties",
+                "country": "United Arab Emirates",
+                "sector": "Real Estate Development",
+                "source_url": "https://example.com/list",
+                "source_title": "Top Real Estate UAE",
+                "source_query": "top real estate companies UAE",
+                "website": "https://www.emaar.com",
+            }
+        ]
+    )
+    assert n == 1
+    assert len(captured) == 1
+    assert captured[0]["on_conflict"] == "slug,country,sector,harvest_version"
+    sent = captured[0]["payload"][0]
+    assert sent["slug"] == "emaar-properties"
+    assert sent["harvest_version"] == "v1"
+    assert sent["raw_context"] == {}
+
+
+def test_write_seed_companies_rejects_unknown_sector(fake_seed_client_factory):
+    fake_seed_client_factory()
+    with pytest.raises(ValueError, match="not in SECTORS"):
+        supabase_tool.write_seed_companies(
+            [
+                {
+                    "name": "X",
+                    "country": "United Arab Emirates",
+                    "sector": "Made Up Sector",
+                    "source_url": "https://example.com",
+                }
+            ]
+        )
+
+
+def test_write_seed_companies_rejects_non_gcc_country(fake_seed_client_factory):
+    fake_seed_client_factory()
+    with pytest.raises(ValueError, match="not in GCC_COUNTRIES"):
+        supabase_tool.write_seed_companies(
+            [
+                {
+                    "name": "X",
+                    "country": "Egypt",
+                    "sector": "Retail & Consumer Goods",
+                    "source_url": "https://example.com",
+                }
+            ]
+        )
+
+
+def test_write_seed_companies_drops_rows_missing_name_or_source(fake_seed_client_factory):
+    _, captured = fake_seed_client_factory()
+    n = supabase_tool.write_seed_companies(
+        [
+            {
+                "name": "",
+                "country": "United Arab Emirates",
+                "sector": "Retail & Consumer Goods",
+                "source_url": "https://example.com",
+            },
+            {
+                "name": "Valid Co",
+                "country": "United Arab Emirates",
+                "sector": "Retail & Consumer Goods",
+                "source_url": "",
+            },
+        ]
+    )
+    assert n == 0
+    assert captured == []
+
+
+def test_write_seed_companies_returns_zero_when_no_rows(fake_seed_client_factory):
+    _, captured = fake_seed_client_factory()
+    n = supabase_tool.write_seed_companies([])
+    assert n == 0
+    assert captured == []
+
+
+def test_fetch_seed_slugs_filters_by_country_sector_version(fake_seed_client_factory):
+    rows = [
+        {
+            "slug": "a",
+            "country": "United Arab Emirates",
+            "sector": "Retail & Consumer Goods",
+            "harvest_version": "v1",
+        },
+        {
+            "slug": "b",
+            "country": "United Arab Emirates",
+            "sector": "Retail & Consumer Goods",
+            "harvest_version": "v1",
+        },
+        {
+            "slug": "c",
+            "country": "Qatar",
+            "sector": "Retail & Consumer Goods",
+            "harvest_version": "v1",
+        },
+        {
+            "slug": "d",
+            "country": "United Arab Emirates",
+            "sector": "Retail & Consumer Goods",
+            "harvest_version": "v2",
+        },
+    ]
+    fake_seed_client_factory(seed_rows=rows)
+    slugs = supabase_tool.fetch_seed_slugs(
+        country="United Arab Emirates",
+        sector="Retail & Consumer Goods",
+    )
+    assert slugs == {"a", "b"}
+
+
+def test_fetch_seed_count_filters_by_country_sector_version(fake_seed_client_factory):
+    rows = [
+        {
+            "id": 1,
+            "country": "United Arab Emirates",
+            "sector": "Banking & Financial Services",
+            "harvest_version": "v1",
+        },
+        {
+            "id": 2,
+            "country": "United Arab Emirates",
+            "sector": "Banking & Financial Services",
+            "harvest_version": "v1",
+        },
+        {
+            "id": 3,
+            "country": "Saudi Arabia",
+            "sector": "Banking & Financial Services",
+            "harvest_version": "v1",
+        },
+    ]
+    fake_seed_client_factory(seed_rows=rows)
+    assert (
+        supabase_tool.fetch_seed_count(
+            country="United Arab Emirates",
+            sector="Banking & Financial Services",
+        )
+        == 2
+    )

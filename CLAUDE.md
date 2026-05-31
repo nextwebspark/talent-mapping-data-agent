@@ -189,6 +189,32 @@ When implementing, build in this order:
 5. Tier 2 selective grounded runner (cron filter `classification_at IS NOT NULL AND firmographics_at IS NULL AND top_company = true`).
 6. Failures table.
 
+## Seed Harvesting (GCC Company Seed List)
+
+Separate from the Zawya-scraped `public.companies` table, we maintain a broader GCC seed pool in `public.company_seed_list`, harvested **inside Claude Code chat sessions** using `WebSearch` + `WebFetch` only (no Gemini, no PDL).
+
+- DDL: [doc/supabase-schema/company_seed_list.sql](doc/supabase-schema/company_seed_list.sql). Unique key `(slug, country, sector, harvest_version)`. Country constrained to GCC 6.
+- Storage helpers (in [src/tools/supabase_tool.py](src/tools/supabase_tool.py)): `slugify`, `write_seed_companies`, `fetch_seed_count`, `fetch_seed_slugs`. Sector validated against `SECTORS`; country against `GCC_COUNTRIES`.
+- Harvest playbook: [doc/SEED_HARVEST_PLAYBOOK.md](doc/SEED_HARVEST_PLAYBOOK.md). Read it at the start of any harvest session.
+
+Per-session workflow (one `(sector, country)` pair):
+
+```
+fetch_seed_slugs(country, sector)              # bootstrap dedup set
+loop:
+    WebSearch templated query
+    WebFetch promising results
+    parse company names + website
+    drop slugs already seen
+    every 20 new rows: write_seed_companies(batch)
+stop when: 200 reached, 3 dry searches in a row, or budget tight
+final flush
+```
+
+Re-running the same pair is safe — the upsert key dedupes.
+
+Out of scope today: feeding seed rows into the Gemini enrichment pipeline, reconciling against `public.companies`, embeddings/ranking. These remain follow-ups.
+
 ## Running Locally
 
 ### Prerequisites
