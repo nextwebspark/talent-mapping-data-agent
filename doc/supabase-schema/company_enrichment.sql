@@ -68,3 +68,14 @@ create index if not exists company_enrichment_sector_tags_gin
 
 create index if not exists company_enrichment_adjacent_sectors_gin
   on public.company_enrichment using gin (adjacent_sectors);
+
+-- Migration: switch enrichment source to company_seed_list; add identity columns
+alter table if exists public.company_enrichment
+  add column if not exists company_name text not null default '',
+  add column if not exists slug text not null default '',
+  add column if not exists country text not null default '';
+
+-- Drop NOT NULL + FK to companies (company_pk becomes a soft bigint reference)
+alter table if exists public.company_enrichment
+  drop constraint if exists company_enrichment_company_pk_fkey,
+  alter column company_pk drop not null;

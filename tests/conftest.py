@@ -24,15 +24,17 @@ def _stub_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def sample_company() -> dict:
+    """Seed-list shaped row with synthetic company_id (= slug) as returned by
+    fetch_unenriched_companies."""
     return {
         "id": 42,
-        "company_id": "zawya-123",
+        "slug": "emaar-properties",
+        "company_id": "emaar-properties",  # synthetic field added by fetch
         "name": "Emaar Properties",
         "country": "United Arab Emirates",
         "website": "https://www.emaar.com",
         "description": "Real estate developer.",
         "sector": "Real Estate",
-        "top_company": True,
     }
 
 
