@@ -23,14 +23,21 @@ from google.genai.types import (
     Tool,
 )
 from pydantic import ValidationError
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import (
+    retry,
+    retry_if_not_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from agent.prompts import EnrichmentResult, build_user_prompt, system_instruction
 from config import load_settings
 
 log = logging.getLogger(__name__)
 
-_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
+# Greedy match (with DOTALL) so nested `}` inside the JSON object don't
+# truncate the capture early.
+_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*\})\s*```", re.DOTALL)
 
 
 def _client() -> Client:
@@ -91,7 +98,13 @@ def _merge_grounding_sources(parsed: dict[str, Any], response: Any) -> dict[str,
     return parsed
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=2, max=20))
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=2, min=2, max=20),
+    # Don't burn 3 Gemini calls on a persistently malformed model output.
+    retry=retry_if_not_exception_type((ValidationError, ValueError)),
+    reraise=True,
+)
 def enrich_company_grounded(
     name: str,
     country: str,

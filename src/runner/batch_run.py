@@ -90,6 +90,11 @@ def run(
                 )
                 write_enrichment(payload)
             enriched += 1
+        except (KeyError, AttributeError, TypeError, NameError):
+            # Programmer errors (malformed row, missing attribute, bad payload
+            # shape) should crash the batch rather than be recorded as
+            # legitimate enrichment failures and pollute the poison-pill counter.
+            raise
         except Exception as exc:
             failed += 1
             log.exception("Failed to enrich %s", name)

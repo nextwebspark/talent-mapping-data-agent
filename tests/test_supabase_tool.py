@@ -69,6 +69,9 @@ class EnrichmentTable:
     def eq(self, *a, **kw):
         return self
 
+    def range(self, start, end):
+        return _ExecResult(self._parent.enriched_rows[start : end + 1])
+
     def execute(self):
         return _result(self._parent.enriched_rows)
 
@@ -95,11 +98,17 @@ class FailuresTable:
         new._filters[column] = value
         return new
 
-    def execute(self):
+    def _filtered_rows(self):
         rows = self._parent.failure_rows
         for col, val in self._filters.items():
             rows = [r for r in rows if r.get(col) == val]
-        return _result(rows)
+        return rows
+
+    def range(self, start, end):
+        return _ExecResult(self._filtered_rows()[start : end + 1])
+
+    def execute(self):
+        return _result(self._filtered_rows())
 
     def insert(self, payload):
         self._parent.failure_insert_capture.append(payload)
