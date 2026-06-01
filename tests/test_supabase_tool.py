@@ -14,39 +14,79 @@ def _result(data):
     return SimpleNamespace(data=data)
 
 
-class CompaniesQuery:
-    """Mimics PostgREST query builder for the companies table.
+class SeedQueryBuilder:
+    """Mimics PostgREST query builder for company_seed_list.
 
-    Captures .eq() filters so tests can assert sector/country/top_company
-    plumbing without needing real PostgREST semantics.
+    Supports .eq(), .or_(), .order(), .range(), .update(), .execute().
+    The .or_() filter for enrichment_status handles the NULL/'pending' logic
+    used by fetch_unenriched_companies.
     """
 
-    def __init__(self, rows, filters: dict | None = None):
-        self.rows = rows
-        self.filters = filters or {}
+    def __init__(self, parent: "FakeClient", filters: dict | None = None, or_filter: str | None = None):
+        self._parent = parent
+        self._filters = filters or {}
+        self._or_filter = or_filter  # raw PostgREST or_ string, parsed in _apply_filters
 
     def select(self, *args, **kwargs):
-        return self
+        return SeedQueryBuilder(self._parent, dict(self._filters), self._or_filter)
 
     def eq(self, column, value):
-        new_filters = dict(self.filters)
+        new_filters = dict(self._filters)
         new_filters[column] = value
-        return CompaniesQuery(self.rows, new_filters)
+        return SeedQueryBuilder(self._parent, new_filters, self._or_filter)
+
+    def or_(self, condition: str):
+        return SeedQueryBuilder(self._parent, dict(self._filters), condition)
 
     def order(self, *args, **kwargs):
-        return self
+        return SeedQueryBuilder(self._parent, dict(self._filters), self._or_filter)
 
     def _apply_filters(self):
-        filtered = self.rows
-        for col, val in self.filters.items():
+        filtered = self._parent.seed_rows
+        for col, val in self._filters.items():
             filtered = [r for r in filtered if r.get(col) == val]
+        # Apply or_ filter for enrichment_status IS NULL OR = 'pending'
+        if self._or_filter and "enrichment_status" in self._or_filter:
+            filtered = [
+                r for r in filtered
+                if r.get("enrichment_status") is None or r.get("enrichment_status") == "pending"
+            ]
         return filtered
 
     def range(self, start, end):
-        return _ExecResult(self._apply_filters()[start : end + 1])
+        return _ExecResult(self._apply_filters()[start: end + 1])
 
     def execute(self):
         return _result(self._apply_filters())
+
+    def update(self, data: dict):
+        return _SeedUpdateBuilder(self._parent, data, dict(self._filters))
+
+    def upsert(self, payload, on_conflict=None):
+        self._parent.upsert_capture.append({"payload": payload, "on_conflict": on_conflict})
+        return _ExecResult(payload if isinstance(payload, list) else [payload])
+
+
+class _SeedUpdateBuilder:
+    """Captures UPDATE calls on company_seed_list."""
+
+    def __init__(self, parent: "FakeClient", data: dict, filters: dict):
+        self._parent = parent
+        self._data = data
+        self._filters = filters
+
+    def eq(self, column, value):
+        new_filters = dict(self._filters)
+        new_filters[column] = value
+        return _SeedUpdateBuilder(self._parent, self._data, new_filters)
+
+    def execute(self):
+        self._parent.seed_status_updates.append({"data": self._data, "filters": self._filters})
+        # Apply update to in-memory rows so subsequent selects see the change
+        for row in self._parent.seed_rows:
+            if all(row.get(k) == v for k, v in self._filters.items()):
+                row.update(self._data)
+        return _result([])
 
 
 class _ExecResult:
@@ -70,7 +110,7 @@ class EnrichmentTable:
         return self
 
     def range(self, start, end):
-        return _ExecResult(self._parent.enriched_rows[start : end + 1])
+        return _ExecResult(self._parent.enriched_rows[start: end + 1])
 
     def execute(self):
         return _result(self._parent.enriched_rows)
@@ -105,14 +145,13 @@ class FailuresTable:
         return rows
 
     def range(self, start, end):
-        return _ExecResult(self._filtered_rows()[start : end + 1])
+        return _ExecResult(self._filtered_rows()[start: end + 1])
 
     def execute(self):
         return _result(self._filtered_rows())
 
     def insert(self, payload):
         self._parent.failure_insert_capture.append(payload)
-        # Simulate the insert showing up in subsequent selects
         self._parent.failure_rows.append(payload)
         return _ExecResult([payload])
 
@@ -134,10 +173,11 @@ class FakeClient:
         self.failure_rows = failure_rows or []
         self.upsert_capture = upsert_capture
         self.failure_insert_capture = failure_insert_capture
+        self.seed_status_updates: list[dict] = []
 
     def table(self, name):
         if name == "company_seed_list":
-            return CompaniesQuery(self.seed_rows)
+            return SeedQueryBuilder(self)
         if name == "company_enrichment":
             return EnrichmentTable(self)
         if name == "company_enrichment_failures":
@@ -252,31 +292,55 @@ def test_build_enrichment_payload_maps_contact_fields(sample_company):
     assert payload["address"] == "P.O. Box 1234, Dubai"
 
 
-def test_fetch_unenriched_dedupes_by_company_id(fake_client_factory):
+def test_fetch_unenriched_dedupes_by_slug(fake_client_factory):
+    """Same slug under two sectors is returned once."""
     rows = [
-        {"id": 1, "slug": "z-1", "name": "A", "country": "UAE", "sector": "Retail"},
-        {"id": 2, "slug": "z-1", "name": "A", "country": "UAE", "sector": "Utility"},
-        {"id": 3, "slug": "z-2", "name": "B", "country": "UAE", "sector": "Retail"},
+        {"id": 1, "slug": "z-1", "name": "A", "country": "UAE", "sector": "Retail", "enrichment_status": None},
+        {"id": 2, "slug": "z-1", "name": "A", "country": "UAE", "sector": "Utility", "enrichment_status": None},
+        {"id": 3, "slug": "z-2", "name": "B", "country": "UAE", "sector": "Retail", "enrichment_status": None},
     ]
     fake_client_factory(seed_rows=rows, enriched_rows=[])
     out = supabase_tool.fetch_unenriched_companies(limit=10, country="UAE")
     assert [r["company_id"] for r in out] == ["z-1", "z-2"]
 
 
-def test_fetch_unenriched_skips_already_enriched(fake_client_factory):
+def test_fetch_unenriched_skips_enriched_status(fake_client_factory):
+    """Rows with enrichment_status='enriched' are excluded by DB query."""
     rows = [
-        {"id": 1, "slug": "z-1", "name": "A", "country": "UAE", "sector": "Retail"},
-        {"id": 2, "slug": "z-2", "name": "B", "country": "UAE", "sector": "Retail"},
-        {"id": 3, "slug": "z-3", "name": "C", "country": "UAE", "sector": "Utility"},
+        {"id": 1, "slug": "z-1", "name": "A", "country": "UAE", "sector": "Retail", "enrichment_status": None},
+        {"id": 2, "slug": "z-2", "name": "B", "country": "UAE", "sector": "Retail", "enrichment_status": "enriched"},
+        {"id": 3, "slug": "z-3", "name": "C", "country": "UAE", "sector": "Utility", "enrichment_status": None},
     ]
-    fake_client_factory(seed_rows=rows, enriched_rows=[{"company_id": "z-2"}])
+    fake_client_factory(seed_rows=rows, enriched_rows=[])
     out = supabase_tool.fetch_unenriched_companies(limit=10)
     assert [r["company_id"] for r in out] == ["z-1", "z-3"]
 
 
+def test_fetch_unenriched_includes_pending_status(fake_client_factory):
+    """Rows with enrichment_status='pending' are included."""
+    rows = [
+        {"id": 1, "slug": "z-1", "name": "A", "country": "UAE", "sector": "Retail", "enrichment_status": "pending"},
+        {"id": 2, "slug": "z-2", "name": "B", "country": "UAE", "sector": "Retail", "enrichment_status": "enriched"},
+    ]
+    fake_client_factory(seed_rows=rows, enriched_rows=[])
+    out = supabase_tool.fetch_unenriched_companies(limit=10)
+    assert [r["company_id"] for r in out] == ["z-1"]
+
+
+def test_fetch_unenriched_skips_failed_status(fake_client_factory):
+    """Rows with enrichment_status='failed' (poison pill) are excluded."""
+    rows = [
+        {"id": 1, "slug": "z-1", "name": "A", "country": "UAE", "sector": "Retail", "enrichment_status": "failed"},
+        {"id": 2, "slug": "z-2", "name": "B", "country": "UAE", "sector": "Retail", "enrichment_status": None},
+    ]
+    fake_client_factory(seed_rows=rows, enriched_rows=[])
+    out = supabase_tool.fetch_unenriched_companies(limit=10)
+    assert [r["company_id"] for r in out] == ["z-2"]
+
+
 def test_fetch_unenriched_respects_limit(fake_client_factory):
     rows = [
-        {"id": i, "slug": f"z-{i}", "name": f"N{i}", "country": "UAE", "sector": "Retail"}
+        {"id": i, "slug": f"z-{i}", "name": f"N{i}", "country": "UAE", "sector": "Retail", "enrichment_status": None}
         for i in range(1, 20)
     ]
     fake_client_factory(seed_rows=rows, enriched_rows=[])
@@ -286,9 +350,9 @@ def test_fetch_unenriched_respects_limit(fake_client_factory):
 
 def test_fetch_unenriched_filters_by_sector(fake_client_factory):
     rows = [
-        {"id": 1, "slug": "z-1", "name": "A", "country": "UAE", "sector": "Retail"},
-        {"id": 2, "slug": "z-2", "name": "B", "country": "UAE", "sector": "Utility"},
-        {"id": 3, "slug": "z-3", "name": "C", "country": "UAE", "sector": "Retail"},
+        {"id": 1, "slug": "z-1", "name": "A", "country": "UAE", "sector": "Retail", "enrichment_status": None},
+        {"id": 2, "slug": "z-2", "name": "B", "country": "UAE", "sector": "Utility", "enrichment_status": None},
+        {"id": 3, "slug": "z-3", "name": "C", "country": "UAE", "sector": "Retail", "enrichment_status": None},
     ]
     fake_client_factory(seed_rows=rows, enriched_rows=[])
     out = supabase_tool.fetch_unenriched_companies(limit=10, sector="Retail")
@@ -298,48 +362,23 @@ def test_fetch_unenriched_filters_by_sector(fake_client_factory):
 def test_fetch_unenriched_top_company_only_ignored(fake_client_factory):
     """top_company_only is a no-op for seed list; all rows returned with a warning."""
     rows = [
-        {"id": 1, "slug": "z-1", "name": "A", "country": "UAE", "sector": "Retail"},
-        {"id": 2, "slug": "z-2", "name": "B", "country": "UAE", "sector": "Retail"},
-        {"id": 3, "slug": "z-3", "name": "C", "country": "UAE", "sector": "Retail"},
+        {"id": 1, "slug": "z-1", "name": "A", "country": "UAE", "sector": "Retail", "enrichment_status": None},
+        {"id": 2, "slug": "z-2", "name": "B", "country": "UAE", "sector": "Retail", "enrichment_status": None},
+        {"id": 3, "slug": "z-3", "name": "C", "country": "UAE", "sector": "Retail", "enrichment_status": None},
     ]
     fake_client_factory(seed_rows=rows, enriched_rows=[])
     out = supabase_tool.fetch_unenriched_companies(limit=10, top_company_only=True)
     assert [r["company_id"] for r in out] == ["z-1", "z-2", "z-3"]
 
 
-def test_fetch_unenriched_skips_poison_pill(fake_client_factory):
-    rows = [
-        {"id": 1, "slug": "z-1", "name": "A", "country": "UAE", "sector": "Retail"},
-        {"id": 2, "slug": "z-2", "name": "B", "country": "UAE", "sector": "Retail"},
-    ]
-    # z-1 has 3 failures at current version -> should be skipped at threshold=3
-    failure_rows = [
-        {"company_id": "z-1", "prompt_version": "v3"},
-        {"company_id": "z-1", "prompt_version": "v3"},
-        {"company_id": "z-1", "prompt_version": "v3"},
-    ]
-    fake_client_factory(seed_rows=rows, enriched_rows=[], failure_rows=failure_rows)
-    out = supabase_tool.fetch_unenriched_companies(limit=10, max_failures_per_row=3)
-    assert [r["company_id"] for r in out] == ["z-2"]
-
-
-def test_fetch_unenriched_keeps_row_below_failure_threshold(fake_client_factory):
-    rows = [
-        {"id": 1, "slug": "z-1", "name": "A", "country": "UAE", "sector": "Retail"},
-    ]
-    failure_rows = [
-        {"company_id": "z-1", "prompt_version": "v3"},
-        {"company_id": "z-1", "prompt_version": "v3"},
-    ]
-    fake_client_factory(seed_rows=rows, enriched_rows=[], failure_rows=failure_rows)
-    out = supabase_tool.fetch_unenriched_companies(limit=10, max_failures_per_row=3)
-    assert [r["company_id"] for r in out] == ["z-1"]
-
-
-def test_write_enrichment_upserts(fake_client_factory):
-    _, captured, _ = fake_client_factory(enriched_rows=[])
+def test_write_enrichment_upserts_and_stamps_status(fake_client_factory):
+    client, captured, _ = fake_client_factory(
+        seed_rows=[{"id": 1, "slug": "z-1", "name": "A", "enrichment_status": None}],
+        enriched_rows=[],
+    )
     payload = {
         "company_id": "z-1",
+        "slug": "z-1",
         "prompt_version": "v1",
         "primary_sector": "Insurance",
         "confidence": 0.5,
@@ -348,11 +387,18 @@ def test_write_enrichment_upserts(fake_client_factory):
     assert len(captured) == 1
     assert captured[0]["payload"] == payload
     assert captured[0]["on_conflict"] == "company_id,prompt_version"
+    # seed row should now be stamped enriched
+    assert any(
+        u["data"] == {"enrichment_status": "enriched"} and u["filters"].get("slug") == "z-1"
+        for u in client.seed_status_updates
+    )
 
 
 def test_write_failure_first_attempt(fake_client_factory, sample_company):
     _, _, failure_captured = fake_client_factory(
-        enriched_rows=[], failure_rows=[]
+        seed_rows=[{"id": sample_company["id"], "slug": sample_company["slug"], "enrichment_status": None}],
+        enriched_rows=[],
+        failure_rows=[],
     )
     err = ValueError("bad JSON from model")
     supabase_tool.write_failure(sample_company, err, prompt_version="v1")
@@ -372,8 +418,10 @@ def test_write_failure_increments_attempt(fake_client_factory, sample_company):
         {"company_id": sample_company["company_id"], "prompt_version": "v1"},
         {"company_id": sample_company["company_id"], "prompt_version": "v1"},
     ]
-    _, _, failure_captured = fake_client_factory(
-        enriched_rows=[], failure_rows=failure_rows
+    client, _, failure_captured = fake_client_factory(
+        seed_rows=[{"id": sample_company["id"], "slug": sample_company["slug"], "enrichment_status": None}],
+        enriched_rows=[],
+        failure_rows=failure_rows,
     )
     err = RuntimeError("boom")
     supabase_tool.write_failure(sample_company, err, prompt_version="v1")
@@ -382,8 +430,44 @@ def test_write_failure_increments_attempt(fake_client_factory, sample_company):
     assert failure_captured[-1]["error_class"] == "RuntimeError"
 
 
+def test_write_failure_stamps_failed_at_threshold(fake_client_factory, sample_company):
+    """When attempt count reaches max_failures_per_row, seed row is stamped 'failed'."""
+    failure_rows = [
+        {"company_id": sample_company["company_id"], "prompt_version": "v1"},
+        {"company_id": sample_company["company_id"], "prompt_version": "v1"},
+    ]
+    client, _, _ = fake_client_factory(
+        seed_rows=[{"id": sample_company["id"], "slug": sample_company["slug"], "enrichment_status": None}],
+        enriched_rows=[],
+        failure_rows=failure_rows,
+    )
+    err = RuntimeError("persistent error")
+    supabase_tool.write_failure(sample_company, err, prompt_version="v1", max_failures_per_row=3)
+    # attempt=3 == max_failures_per_row → should stamp 'failed'
+    assert any(
+        u["data"] == {"enrichment_status": "failed"} and u["filters"].get("slug") == sample_company["slug"]
+        for u in client.seed_status_updates
+    )
+
+
+def test_write_failure_does_not_stamp_below_threshold(fake_client_factory, sample_company):
+    """Below the threshold, seed status is not updated."""
+    client, _, _ = fake_client_factory(
+        seed_rows=[{"id": sample_company["id"], "slug": sample_company["slug"], "enrichment_status": None}],
+        enriched_rows=[],
+        failure_rows=[],
+    )
+    err = RuntimeError("first error")
+    supabase_tool.write_failure(sample_company, err, prompt_version="v1", max_failures_per_row=3)
+    # attempt=1 < 3 → no status update
+    assert client.seed_status_updates == []
+
+
 def test_write_failure_truncates_long_messages(fake_client_factory, sample_company):
-    _, _, failure_captured = fake_client_factory(enriched_rows=[])
+    _, _, failure_captured = fake_client_factory(
+        seed_rows=[{"id": sample_company["id"], "slug": sample_company["slug"], "enrichment_status": None}],
+        enriched_rows=[],
+    )
     big = "x" * 5000
     err = RuntimeError(big)
     supabase_tool.write_failure(sample_company, err, prompt_version="v1", raw_response=big)
@@ -396,7 +480,7 @@ def test_write_failure_truncates_long_messages(fake_client_factory, sample_compa
 
 
 class SeedTable:
-    """Routes select/upsert for company_seed_list."""
+    """Routes select/upsert for company_seed_list (used by FakeSeedClient)."""
 
     def __init__(self, parent: "FakeSeedClient"):
         self._parent = parent
@@ -420,7 +504,7 @@ class SeedTable:
         return rows
 
     def range(self, start, end):
-        return _ExecResult(self._filtered_rows()[start : end + 1])
+        return _ExecResult(self._filtered_rows()[start: end + 1])
 
     def execute(self):
         return _result(self._filtered_rows())
