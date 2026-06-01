@@ -9,7 +9,6 @@ This repository implements the **company-enrichment** layer of the **HAK Talent 
 A recruiter searching for a "Group CFO with GCC real-estate experience" needs more than a coarse sector label. They need:
 
 - A controlled, multi-tag sector taxonomy
-- Adjacent-sector mapping (where talent realistically transfers from)
 - Firmographic context (size, revenue, listed status)
 - Evidence trails so the AI's reasoning is auditable
 
@@ -36,7 +35,6 @@ The source data — scraped from `zawya.com` into a Supabase `companies` table �
 │  Output: public.company_enrichment                                   │
 │  • primary_sector (1 of 20 taxonomy buckets)                         │
 │  • sector_tags[]            (taxonomy + free-form sub-tags)          │
-│  • adjacent_sectors[]       (recruiter-perspective talent adjacency) │
 │  • tagline + business_description                                    │
 │  • employee_band + estimate                                          │
 │  • revenue_band + estimate                                           │
@@ -53,12 +51,11 @@ The source data — scraped from `zawya.com` into a Supabase `companies` table �
 Downstream consumers query this table with plain SQL (no LLM at query time):
 
 ```sql
--- Companies relevant to a "real estate" search mandate, including adjacent talent
+-- Companies relevant to a "real estate" search mandate
 SELECT c.name, e.primary_sector, e.sector_tags, e.employee_band, e.confidence
 FROM   companies c
 JOIN   company_enrichment e ON e.company_pk = c.id
-WHERE (e.primary_sector = 'Real Estate Development'
-       OR e.adjacent_sectors && ARRAY['Real Estate Development'])
+WHERE  e.primary_sector = 'Real Estate Development'
   AND  e.employee_band IN ('1k-5k', '5k-10k', '10k+')
   AND  e.confidence >= 0.7;
 ```
@@ -76,7 +73,7 @@ Both reuse the same tools: `enrich_company_grounded`, `write_enrichment`, `fetch
 
 ### Why no vector database
 
-For the MVP, sector/size/country filtering is categorical and array-based. PostgreSQL with GIN indexes on `sector_tags[]` and `adjacent_sectors[]` handles every documented universe query in milliseconds. A vector database would add an entire system component for no benefit at the current scale.
+For the MVP, sector/size/country filtering is categorical and array-based. PostgreSQL with GIN indexes on `sector_tags[]` handles every documented universe query in milliseconds. A vector database would add an entire system component for no benefit at the current scale.
 
 Semantic mandate-to-company matching (HAK plan §2.2.1 step 3) will need vectors. When that lands, the recommended path is `pgvector` inside the same Supabase Postgres — not a separate Pinecone/Qdrant instance.
 
@@ -93,24 +90,25 @@ Semantic mandate-to-company matching (HAK plan §2.2.1 step 3) will need vectors
 | **Tests** | `pytest` + monkeypatch | 40 unit tests, fully mocked, no network |
 | **Retries** | `tenacity` | Exponential backoff on Gemini transient errors |
 
-## Sector taxonomy (20 buckets)
+## Sector taxonomy (22 buckets)
 
-UAE/GCC-flavored. Defined in [`src/agent/taxonomy.py`](src/agent/taxonomy.py).
+UAE/GCC-flavored. Defined in [`src/agent/taxonomy.py`](src/agent/taxonomy.py). Aligned 1:1 with HAK product 22-sector list.
 
 ```
-Banking & Financial Services        Telecommunications
-Insurance                           Technology & Software
-Capital Markets & Asset Management  Retail & Consumer Goods
-Real Estate Development             Hospitality, Travel & Tourism
-Construction & Engineering          Healthcare & Pharmaceuticals
-Oil & Gas — Upstream                Logistics, Shipping & Ports
-Oil & Gas — Downstream/Petrochem    Aviation & Aerospace
-Power & Utilities                   Manufacturing & Industrial
-Media, Entertainment & Advertising  Education & Training
-Professional Services               Conglomerates / Family Groups / Holdings
+Banking & Financial Services        Consumer Goods
+Insurance                           Retail & E-Commerce
+Capital Markets & Asset Management  Hospitality, Travel & Tourism
+Real Estate Development             Healthcare & Pharmaceuticals
+Construction & Engineering          Logistics, Shipping & Ports
+Oil & Gas — Upstream                Aviation & Aerospace
+Oil & Gas — Downstream/Petrochem    Manufacturing & Industrial
+Power & Utilities                   Media, Entertainment & Gaming
+Telecommunications                  Education & Training
+Technology & Software               Professional Services
+Government, Public Sector & Non-Profit   Conglomerates / Family Groups / Holdings
 ```
 
-The taxonomy is paired with an **adjacency map** describing recruiter-perspective talent mobility (e.g. retail talent often moves into hospitality and logistics). The map is used by both the prompt and downstream universe queries.
+The taxonomy is paired with an **adjacency map** (`ADJACENCY` in `taxonomy.py`) describing recruiter-perspective talent mobility (e.g. retail talent often moves into hospitality and logistics). Used at query time by the universe builder — not during enrichment.
 
 ## Getting started
 
@@ -173,11 +171,11 @@ uv run batch-run --limit 5 --sector "Retailers"
 Sample output (real run, 2026-05-21):
 
 ```
-[1/5] Rivoli Group LLC (4297788558)              → Retail & Consumer Goods    | conf 0.90
-[2/5] Jumbo Electronics Co Ltd LLC (4297498740)  → Conglomerates / Holdings   | conf 0.85
+[1/5] Rivoli Group LLC (4297788558)              → Retail & E-Commerce       | conf 0.90
+[2/5] Jumbo Electronics Co Ltd LLC (4297498740)  → Conglomerates / Holdings  | conf 0.85
 [3/5] Axiom Telecom LLC (5000021359)             → Logistics, Shipping & Ports | conf 0.85
-[4/5] Al Habtoor Motors Co LLC (5034762771)      → Retail & Consumer Goods    | conf 0.90
-[5/5] Paris Gallery LLC (5000043301)             → Retail & Consumer Goods    | conf 0.80
+[4/5] Al Habtoor Motors Co LLC (5034762771)      → Retail & E-Commerce       | conf 0.90
+[5/5] Paris Gallery LLC (5000043301)             → Retail & E-Commerce       | conf 0.80
 Done. enriched=5 failed=0 low_confidence=0
 ```
 
@@ -198,7 +196,7 @@ Done. enriched=5 failed=0 low_confidence=0
 ### Inspect results
 
 ```sql
-SELECT c.name, e.primary_sector, e.sector_tags, e.adjacent_sectors,
+SELECT c.name, e.primary_sector, e.sector_tags,
        e.employee_band, e.revenue_band, e.confidence
 FROM   companies c
 JOIN   company_enrichment e ON e.company_pk = c.id

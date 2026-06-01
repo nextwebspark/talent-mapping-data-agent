@@ -1,4 +1,4 @@
-"""Controlled sub-tag vocabulary for company enrichment (v3).
+"""Controlled sub-tag vocabulary for company enrichment (v4).
 
 Closed list of industry sub-niches. Both Layer 1 brief parsing and Layer 2
 company enrichment must draw from this list so the universe builder can match
@@ -57,6 +57,7 @@ SUB_TAGS_BY_SECTOR: dict[str, list[str]] = {
         "venture-capital",
         "hedge-fund",
         "sovereign-wealth-fund",
+        "family-office",
         "real-estate-fund",
         "sukuk-issuance",
         "investment-advisory",
@@ -77,6 +78,8 @@ SUB_TAGS_BY_SECTOR: dict[str, list[str]] = {
         "real-estate-brokerage",
         "facilities-management",
         "property-management",
+        "real-estate-investment",
+        "reits",
         "proptech",
     ],
     "Construction & Engineering": [
@@ -84,6 +87,7 @@ SUB_TAGS_BY_SECTOR: dict[str, list[str]] = {
         "epc-contractor",
         "mep-contracting",
         "civil-infrastructure",
+        "infrastructure-development",
         "roads-bridges",
         "marine-construction",
         "interior-fitout",
@@ -92,6 +96,7 @@ SUB_TAGS_BY_SECTOR: dict[str, list[str]] = {
         "project-management-construction",
         "facade-engineering",
         "modular-construction",
+        "building-materials-construction",
     ],
     "Oil & Gas - Upstream": [
         "exploration-production",
@@ -161,34 +166,45 @@ SUB_TAGS_BY_SECTOR: dict[str, list[str]] = {
         "healthtech-software",
         "edtech-software",
         "devtools",
+        "it-services",
         "it-services-systems-integration",
         "hardware-iot",
         "ar-vr",
         "blockchain-crypto",
+        "digital-platforms",
     ],
-    "Retail & Consumer Goods": [
+    "Consumer Goods": [
+        "fmcg-manufacturing",
+        "food-beverage-brand",
+        "beauty-cosmetics",
+        "personal-care",
+        "household-products",
+        "consumer-products",
+        "home-furnishings",
+        "jewelry-watches",
+    ],
+    "Retail & E-Commerce": [
         "fashion-apparel",
         "luxury-retail",
         "grocery-supermarket",
         "consumer-electronics",
-        "home-furnishings",
-        "beauty-cosmetics",
-        "jewelry-watches",
+        "electronics-retail",
         "automotive-retail",
-        "fmcg-manufacturing",
-        "food-beverage-brand",
         "ecommerce-retailer",
         "department-store",
         "specialty-retail",
         "mobile-devices",
+        "omnichannel-retail",
     ],
     "Hospitality, Travel & Tourism": [
         "hotels-luxury",
         "hotels-midscale",
+        "resorts",
         "serviced-apartments",
         "restaurants-fb",
         "qsr-fast-casual",
         "cafes-coffee",
+        "food-service",
         "destination-management",
         "tour-operator",
         "travel-agency-otas",
@@ -207,6 +223,7 @@ SUB_TAGS_BY_SECTOR: dict[str, list[str]] = {
         "medical-devices",
         "biotech-research",
         "telehealth",
+        "digital-health",
         "pharmacy-retail",
         "home-healthcare",
     ],
@@ -222,6 +239,7 @@ SUB_TAGS_BY_SECTOR: dict[str, list[str]] = {
         "customs-brokerage",
         "intermodal-rail",
         "trucking-road-freight",
+        "logistics-distribution",
         "logistics-tech",
     ],
     "Aviation & Aerospace": [
@@ -230,6 +248,7 @@ SUB_TAGS_BY_SECTOR: dict[str, list[str]] = {
         "low-cost-carrier",
         "airport-operations",
         "ground-handling",
+        "aviation-services",
         "mro-aircraft-maintenance",
         "aircraft-leasing",
         "aerospace-manufacturing",
@@ -253,7 +272,7 @@ SUB_TAGS_BY_SECTOR: dict[str, list[str]] = {
         "industrial-automation",
         "contract-manufacturing",
     ],
-    "Media, Entertainment & Advertising": [
+    "Media, Entertainment & Gaming": [
         "broadcasting-tv",
         "radio",
         "print-publishing",
@@ -294,9 +313,19 @@ SUB_TAGS_BY_SECTOR: dict[str, list[str]] = {
         "engineering-consulting",
         "actuarial-services",
         "outsourcing-bpo",
+        "facilities-management-services",
+    ],
+    "Government, Public Sector & Non-Profit": [
+        "government-entity",
+        "regulatory-body",
+        "ngo",
+        "international-organisation",
+        "public-sector-agency",
+        "defense-public",
     ],
     "Conglomerates / Family Groups / Holdings": [
         "family-business-group",
+        "family-office-operating",
         "diversified-holding",
         "investment-holding",
         "trading-group",
@@ -304,6 +333,7 @@ SUB_TAGS_BY_SECTOR: dict[str, list[str]] = {
         "ruling-family-holding",
         "sovereign-holding",
         "regional-distributor-group",
+        "multi-sector-investment-group",
     ],
 }
 

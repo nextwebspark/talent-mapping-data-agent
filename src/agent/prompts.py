@@ -17,7 +17,7 @@ from agent.taxonomy import EMPLOYEE_BANDS, REVENUE_BANDS, SECTORS
 
 log = logging.getLogger(__name__)
 
-PROMPT_VERSION = "v3"
+PROMPT_VERSION = "v5"
 
 SECTOR_SET: set[str] = set(SECTORS)
 
@@ -73,10 +73,6 @@ class EnrichmentResult(BaseModel):
             "Free-flow descriptive keywords (brands, geographies, business "
             "models). Informational only; future embedding similarity."
         ),
-    )
-    adjacent_sectors: list[str] = Field(
-        default_factory=list,
-        description="Up to 4 taxonomy sectors where talent could realistically transfer.",
     )
     tagline: str | None = Field(default=None, description="One-line description of the business.")
     business_description: str | None = Field(default=None, description="2-3 sentence description.")
@@ -190,29 +186,25 @@ CRITICAL RULES:
    "lulu-group-owned", "pan-gcc", "b2b-wholesale", "msme-focus". These are
    informational; not used for hard filtering.
 
-7. `adjacent_sectors`: up to 4 entries from the taxonomy list above, chosen
-   from a recruiter perspective - sectors where talent at this company could
-   realistically move. TALENT adjacency, not business-model adjacency.
-
-8. `employee_band` must be one of: {emp_bands}. Set `employee_count_estimate`
+7. `employee_band` must be one of: {emp_bands}. Set `employee_count_estimate`
    only when you found a sourced figure.
 
-9. `revenue_band` must be one of: {rev_bands}. Set `revenue_estimate_usd`
+8. `revenue_band` must be one of: {rev_bands}. Set `revenue_estimate_usd`
    only when you found a sourced figure (convert non-USD using a recent rate).
 
-10. `website`, `phone`, `email`, `address`: extract from official company
-    website, LinkedIn, or authoritative directory (Crunchbase, Bloomberg,
-    official regulator listings). Do NOT invent. If a field cannot be found
-    via grounded search, leave it null. Every contact field returned MUST
-    have a backing entry in `sources`. Prefer E.164 format for `phone`
-    (e.g. +9714xxxxxxx). `address` MUST be a single plain string (concatenate
-    street, city, country with commas) - never an object/dict. `website`,
-    `phone`, `email` must each be a single string or null.
+9. `website`, `phone`, `email`, `address`: extract from official company
+   website, LinkedIn, or authoritative directory (Crunchbase, Bloomberg,
+   official regulator listings). Do NOT invent. If a field cannot be found
+   via grounded search, leave it null. Every contact field returned MUST
+   have a backing entry in `sources`. Prefer E.164 format for `phone`
+   (e.g. +9714xxxxxxx). `address` MUST be a single plain string (concatenate
+   street, city, country with commas) - never an object/dict. `website`,
+   `phone`, `email` must each be a single string or null.
 
-11. `confidence`: 0.0-1.0. Lower (<0.5) when most fields are null/inferred.
+10. `confidence`: 0.0-1.0. Lower (<0.5) when most fields are null/inferred.
     Higher (>0.8) when bands, sector, and description are all backed by sources.
 
-12. `sources`: include every URL you relied on for non-trivial facts (revenue,
+11. `sources`: include every URL you relied on for non-trivial facts (revenue,
     headcount, sector classification, contact info, sector_mix weights).
     Title + short snippet where available.
 

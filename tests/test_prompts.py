@@ -13,7 +13,7 @@ from agent.taxonomy import SECTORS
 
 
 def test_prompt_version_set():
-    assert PROMPT_VERSION == "v3"
+    assert PROMPT_VERSION == "v5"
 
 
 def test_system_instruction_lists_all_sectors():
@@ -185,7 +185,7 @@ def test_enrichment_result_sector_mix_round_trip():
             "confidence": 0.8,
             "sector_mix": [
                 {"sector": "Conglomerates / Family Groups / Holdings", "weight": "dominant"},
-                {"sector": "Retail & Consumer Goods", "weight": "significant"},
+                {"sector": "Retail & E-Commerce", "weight": "significant"},
                 {"sector": "Real Estate Development", "weight": "minor"},
             ],
         }
