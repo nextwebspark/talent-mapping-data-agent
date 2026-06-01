@@ -1,10 +1,10 @@
 """Sector taxonomy for company enrichment.
 
-Primary sector must be one of SECTORS. Adjacent sectors must also be from
-SECTORS. sector_tags may include any of these plus free-form sub-tags.
+Primary sector must be one of SECTORS. sector_tags may include any of these
+plus free-form sub-tags.
 
-ADJACENCY is a hint map for the downstream universe builder; the enrichment
-agent may produce different adjacencies if grounded evidence supports it.
+ADJACENCY is used at query time by the universe builder to expand a mandate's
+target sectors into adjacent talent pools. Not used during enrichment.
 """
 
 SECTORS: list[str] = [
@@ -18,15 +18,17 @@ SECTORS: list[str] = [
     "Power & Utilities",
     "Telecommunications",
     "Technology & Software",
-    "Retail & Consumer Goods",
+    "Consumer Goods",
+    "Retail & E-Commerce",
     "Hospitality, Travel & Tourism",
     "Healthcare & Pharmaceuticals",
     "Logistics, Shipping & Ports",
     "Aviation & Aerospace",
     "Manufacturing & Industrial",
-    "Media, Entertainment & Advertising",
+    "Media, Entertainment & Gaming",
     "Education & Training",
     "Professional Services",
+    "Government, Public Sector & Non-Profit",
     "Conglomerates / Family Groups / Holdings",
 ]
 
@@ -73,22 +75,27 @@ ADJACENCY: dict[str, list[str]] = {
     ],
     "Telecommunications": [
         "Technology & Software",
-        "Media, Entertainment & Advertising",
+        "Media, Entertainment & Gaming",
         "Professional Services",
     ],
     "Technology & Software": [
         "Telecommunications",
         "Banking & Financial Services",
-        "Media, Entertainment & Advertising",
+        "Media, Entertainment & Gaming",
     ],
-    "Retail & Consumer Goods": [
-        "Logistics, Shipping & Ports",
-        "Hospitality, Travel & Tourism",
+    "Consumer Goods": [
+        "Retail & E-Commerce",
         "Manufacturing & Industrial",
+        "Logistics, Shipping & Ports",
+    ],
+    "Retail & E-Commerce": [
+        "Consumer Goods",
+        "Hospitality, Travel & Tourism",
+        "Logistics, Shipping & Ports",
     ],
     "Hospitality, Travel & Tourism": [
         "Aviation & Aerospace",
-        "Retail & Consumer Goods",
+        "Retail & E-Commerce",
         "Real Estate Development",
     ],
     "Healthcare & Pharmaceuticals": [
@@ -97,7 +104,7 @@ ADJACENCY: dict[str, list[str]] = {
         "Education & Training",
     ],
     "Logistics, Shipping & Ports": [
-        "Retail & Consumer Goods",
+        "Retail & E-Commerce",
         "Aviation & Aerospace",
         "Manufacturing & Industrial",
     ],
@@ -109,9 +116,9 @@ ADJACENCY: dict[str, list[str]] = {
     "Manufacturing & Industrial": [
         "Construction & Engineering",
         "Logistics, Shipping & Ports",
-        "Retail & Consumer Goods",
+        "Consumer Goods",
     ],
-    "Media, Entertainment & Advertising": [
+    "Media, Entertainment & Gaming": [
         "Technology & Software",
         "Telecommunications",
         "Professional Services",
@@ -126,9 +133,14 @@ ADJACENCY: dict[str, list[str]] = {
         "Capital Markets & Asset Management",
         "Conglomerates / Family Groups / Holdings",
     ],
+    "Government, Public Sector & Non-Profit": [
+        "Professional Services",
+        "Construction & Engineering",
+        "Healthcare & Pharmaceuticals",
+    ],
     "Conglomerates / Family Groups / Holdings": [
         "Real Estate Development",
-        "Retail & Consumer Goods",
+        "Retail & E-Commerce",
         "Hospitality, Travel & Tourism",
     ],
 }

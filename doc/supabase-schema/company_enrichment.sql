@@ -1,4 +1,7 @@
 -- Enrichment output for companies. One row per (company_id, prompt_version).
+-- v5 migration (run once on live DB):
+--   DROP INDEX IF EXISTS company_enrichment_adjacent_sectors_gin;
+--   ALTER TABLE public.company_enrichment DROP COLUMN IF EXISTS adjacent_sectors;
 -- company_id is the Zawya identifier; we dedupe per Zawya company, not per
 -- companies.id (since the same company_id can appear under multiple sectors).
 
@@ -32,7 +35,6 @@ create table if not exists public.company_enrichment (
   company_id text not null,
   primary_sector text not null,
   sector_tags text[] not null default '{}',
-  adjacent_sectors text[] not null default '{}',
   tagline text,
   business_description text,
   employee_band text,
@@ -65,9 +67,6 @@ create index if not exists company_enrichment_primary_sector_idx
 
 create index if not exists company_enrichment_sector_tags_gin
   on public.company_enrichment using gin (sector_tags);
-
-create index if not exists company_enrichment_adjacent_sectors_gin
-  on public.company_enrichment using gin (adjacent_sectors);
 
 -- Migration: switch enrichment source to company_seed_list; add identity columns
 alter table if exists public.company_enrichment

@@ -180,7 +180,6 @@ def test_build_enrichment_payload_maps_fields(sample_company, sample_enrichment)
     assert payload["proposed_tags"] == sample_enrichment["proposed_tags"]
     assert payload["keywords"] == sample_enrichment["keywords"]
     assert payload["sector_mix"] == sample_enrichment["sector_mix"]
-    assert payload["adjacent_sectors"] == sample_enrichment["adjacent_sectors"]
     assert payload["confidence"] == 0.92
     assert payload["model"] == "gemini-2.5-pro"
     assert payload["prompt_version"] == "v3"
@@ -197,7 +196,6 @@ def test_build_enrichment_payload_defaults_for_missing(sample_company):
     assert payload["proposed_tags"] == []
     assert payload["keywords"] == []
     assert payload["sector_mix"] == []
-    assert payload["adjacent_sectors"] == []
     assert payload["sources"] == []
     assert payload["tagline"] is None
     assert payload["revenue_estimate_usd"] is None
@@ -210,7 +208,7 @@ def test_build_enrichment_payload_defaults_for_missing(sample_company):
 def test_build_enrichment_payload_legacy_sector_tags_mirrors_sub_tags(sample_company):
     """v3 rows must populate legacy `sector_tags` (NOT NULL) with sub_tags content."""
     enrichment = {
-        "primary_sector": "Retail & Consumer Goods",
+        "primary_sector": "Retail & E-Commerce",
         "confidence": 0.8,
         "sub_tags": ["luxury-retail", "jewelry-watches"],
     }
@@ -224,7 +222,7 @@ def test_build_enrichment_payload_legacy_sector_tags_mirrors_sub_tags(sample_com
 def test_build_enrichment_payload_legacy_sector_tags_explicit_override(sample_company):
     """If caller passes explicit `sector_tags`, respect it (back-compat path)."""
     enrichment = {
-        "primary_sector": "Retail & Consumer Goods",
+        "primary_sector": "Retail & E-Commerce",
         "confidence": 0.8,
         "sub_tags": ["luxury-retail"],
         "sector_tags": ["legacy-explicit"],
@@ -509,7 +507,7 @@ def test_write_seed_companies_rejects_non_gcc_country(fake_seed_client_factory):
                 {
                     "name": "X",
                     "country": "Egypt",
-                    "sector": "Retail & Consumer Goods",
+                    "sector": "Retail & E-Commerce",
                     "source_url": "https://example.com",
                 }
             ]
@@ -523,13 +521,13 @@ def test_write_seed_companies_drops_rows_missing_name_or_source(fake_seed_client
             {
                 "name": "",
                 "country": "United Arab Emirates",
-                "sector": "Retail & Consumer Goods",
+                "sector": "Retail & E-Commerce",
                 "source_url": "https://example.com",
             },
             {
                 "name": "Valid Co",
                 "country": "United Arab Emirates",
-                "sector": "Retail & Consumer Goods",
+                "sector": "Retail & E-Commerce",
                 "source_url": "",
             },
         ]
@@ -550,32 +548,32 @@ def test_fetch_seed_slugs_filters_by_country_sector_version(fake_seed_client_fac
         {
             "slug": "a",
             "country": "United Arab Emirates",
-            "sector": "Retail & Consumer Goods",
+            "sector": "Retail & E-Commerce",
             "harvest_version": "v1",
         },
         {
             "slug": "b",
             "country": "United Arab Emirates",
-            "sector": "Retail & Consumer Goods",
+            "sector": "Retail & E-Commerce",
             "harvest_version": "v1",
         },
         {
             "slug": "c",
             "country": "Qatar",
-            "sector": "Retail & Consumer Goods",
+            "sector": "Retail & E-Commerce",
             "harvest_version": "v1",
         },
         {
             "slug": "d",
             "country": "United Arab Emirates",
-            "sector": "Retail & Consumer Goods",
+            "sector": "Retail & E-Commerce",
             "harvest_version": "v2",
         },
     ]
     fake_seed_client_factory(seed_rows=rows)
     slugs = supabase_tool.fetch_seed_slugs(
         country="United Arab Emirates",
-        sector="Retail & Consumer Goods",
+        sector="Retail & E-Commerce",
     )
     assert slugs == {"a", "b"}
 

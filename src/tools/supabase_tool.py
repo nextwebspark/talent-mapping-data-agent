@@ -250,7 +250,6 @@ def build_enrichment_payload(
         "proposed_tags": enrichment.get("proposed_tags") or [],
         "keywords": enrichment.get("keywords") or [],
         "sector_mix": enrichment.get("sector_mix") or [],
-        "adjacent_sectors": enrichment.get("adjacent_sectors") or [],
         "tagline": enrichment.get("tagline"),
         "business_description": enrichment.get("business_description"),
         "employee_band": enrichment.get("employee_band"),

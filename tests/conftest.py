@@ -49,10 +49,6 @@ def sample_enrichment() -> dict:
         "sub_tags": ["luxury-residential", "master-planned-communities"],
         "proposed_tags": [],
         "keywords": ["pan-gcc", "publicly-listed", "branded-developer"],
-        "adjacent_sectors": [
-            "Construction & Engineering",
-            "Hospitality, Travel & Tourism",
-        ],
         "tagline": "UAE-based master-plan developer.",
         "business_description": "Develops large-scale residential and mixed-use communities.",
         "employee_band": "5k-10k",
