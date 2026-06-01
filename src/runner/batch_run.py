@@ -100,7 +100,7 @@ def run(
             log.exception("Failed to enrich %s", name)
             if not dry_run:
                 try:
-                    write_failure(row, exc, settings.prompt_version)
+                    write_failure(row, exc, settings.prompt_version, max_failures_per_row=max_failures_per_row)
                 except Exception:
                     log.exception("Also failed to record failure for %s", name)
             if max_failures_before_stop is not None and failed >= max_failures_before_stop:

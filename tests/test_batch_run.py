@@ -41,7 +41,7 @@ def mock_pipeline(monkeypatch, sample_enrichment):
     monkeypatch.setattr(
         batch_run,
         "write_failure",
-        lambda row, exc, prompt_version, raw_response=None: failures.append(
+        lambda row, exc, prompt_version, raw_response=None, max_failures_per_row=3: failures.append(
             {
                 "row": row,
                 "error_class": type(exc).__name__,
@@ -109,7 +109,7 @@ def test_run_failure_continues_and_records(monkeypatch, sample_enrichment):
     monkeypatch.setattr(
         batch_run,
         "write_failure",
-        lambda row, exc, prompt_version, raw_response=None: failures.append(
+        lambda row, exc, prompt_version, raw_response=None, max_failures_per_row=3: failures.append(
             {"company_id": row["company_id"], "error_class": type(exc).__name__}
         ),
     )
@@ -139,7 +139,7 @@ def test_run_aborts_at_max_failures_before_stop(monkeypatch, sample_enrichment):
     monkeypatch.setattr(
         batch_run,
         "write_failure",
-        lambda row, exc, prompt_version, raw_response=None: failures.append(row),
+        lambda row, exc, prompt_version, raw_response=None, max_failures_per_row=3: failures.append(row),
     )
 
     rc = batch_run.run(**_default_kwargs(max_failures_before_stop=2))

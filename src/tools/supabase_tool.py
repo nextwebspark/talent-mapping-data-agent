@@ -69,47 +69,37 @@ def fetch_unenriched_companies(
     prompt_version: str | None = None,
     max_failures_per_row: int = 3,
 ) -> list[dict[str, Any]]:
-    """Return up to `limit` seed-list companies that have no enrichment for the
-    current prompt_version.
+    """Return up to `limit` seed-list companies ready to enrich.
 
-    Source table: company_seed_list (not companies). Dedupes by `slug` so each
-    company is enriched once even if it appears under multiple sectors. Each
-    returned row has a synthetic `company_id` key set to the row's slug.
+    Source table: company_seed_list (not companies). Filters to rows where
+    enrichment_status IS NULL or 'pending' — avoiding the expensive full-table
+    load of company_enrichment that the old approach required. Dedupes by
+    `slug` so each company is enriched once even if it appears under multiple
+    sectors. Each returned row has a synthetic `company_id` key set to slug.
 
     Args:
         limit: Max rows.
         country: Optional country filter (exact match on company_seed_list.country).
         sector: Optional sector filter (exact match on company_seed_list.sector).
         top_company_only: Ignored — company_seed_list has no top_company field.
-        prompt_version: If None, uses settings.prompt_version.
-        max_failures_per_row: Skip rows that have >= this many recorded
-            failures at the current prompt_version (poison pill protection).
+        prompt_version: Unused — kept for call-site back-compat.
+        max_failures_per_row: Unused — 'failed' status on the seed row already
+            excludes poison pills. Kept for call-site back-compat.
 
     Returns:
         List of {id, company_id, name, slug, country, sector, website, description}.
         `company_id` equals `slug`.
     """
-    settings = load_settings()
-    version = prompt_version or settings.prompt_version
     client = _client()
 
     if top_company_only:
         log.warning("top_company_only ignored: company_seed_list has no top_company field")
 
-    enriched_rows = _select_all(
-        lambda: client.table("company_enrichment")
-        .select("company_id")
-        .eq("prompt_version", version)
-    )
-    enriched_ids = {row["company_id"] for row in enriched_rows}
-
-    failure_counts = _failure_counts_by_company(version)
-    poison_ids = {cid for cid, count in failure_counts.items() if count >= max_failures_per_row}
-
     def _make_seed_query() -> Any:
         q = (
             client.table("company_seed_list")
             .select("id, name, slug, country, sector, website, description")
+            .or_("enrichment_status.is.null,enrichment_status.eq.pending")
             .order("id", desc=False)
         )
         if country:
@@ -128,7 +118,7 @@ def fetch_unenriched_companies(
             break
         for row in data:
             slug = row["slug"]
-            if slug in enriched_ids or slug in seen_slugs or slug in poison_ids:
+            if slug in seen_slugs:
                 continue
             seen_slugs.add(slug)
             row["company_id"] = slug
@@ -168,8 +158,26 @@ _TRANSIENT_WRITE_ERRORS = (ConnectionError, TimeoutError, OSError)
     retry=retry_if_exception_type(_TRANSIENT_WRITE_ERRORS),
     reraise=True,
 )
+def update_seed_enrichment_status(slug: str, status: str) -> None:
+    """Stamp enrichment_status on all company_seed_list rows for this slug.
+
+    One slug can appear under multiple sectors; all rows get the same status
+    because enrichment is once per slug.
+    """
+    client = _client()
+    client.table("company_seed_list").update({"enrichment_status": status}).eq(
+        "slug", slug
+    ).execute()
+
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    retry=retry_if_exception_type(_TRANSIENT_WRITE_ERRORS),
+    reraise=True,
+)
 def write_enrichment(payload: dict[str, Any]) -> dict[str, Any]:
-    """Upsert one row into company_enrichment.
+    """Upsert one row into company_enrichment and stamp seed list as enriched.
 
     Conflict target: (company_id, prompt_version). Returns the inserted row.
     """
@@ -180,6 +188,9 @@ def write_enrichment(payload: dict[str, Any]) -> dict[str, Any]:
         .execute()
     )
     data = result.data or []
+    slug = payload.get("slug") or payload.get("company_id")
+    if slug:
+        update_seed_enrichment_status(slug, "enriched")
     return data[0] if data else {}
 
 
@@ -194,14 +205,16 @@ def write_failure(
     error: BaseException,
     prompt_version: str,
     raw_response: str | None = None,
+    max_failures_per_row: int = 3,
 ) -> dict[str, Any]:
     """Insert one row into company_enrichment_failures.
 
     Attempt number is computed from existing failures for the same
-    (company_id, prompt_version). NOTE: under concurrent writers, two callers
-    can compute the same attempt number. A unique constraint on
-    (company_id, prompt_version, attempt) plus retry would close the race;
-    we don't currently rely on that because the batch CLI is single-threaded.
+    (company_id, prompt_version). When attempt count reaches max_failures_per_row,
+    stamps enrichment_status = 'failed' on the seed list row (poison pill).
+
+    NOTE: under concurrent writers two callers can compute the same attempt
+    number; the batch CLI is single-threaded so this is acceptable.
     """
     client = _client()
     existing_rows = _select_all(
@@ -222,6 +235,12 @@ def write_failure(
         "raw_response": raw_response[:5000] if raw_response else None,
     }
     result = client.table("company_enrichment_failures").insert(payload).execute()
+
+    if attempt >= max_failures_per_row:
+        slug = company_row.get("slug") or company_row.get("company_id")
+        if slug:
+            update_seed_enrichment_status(slug, "failed")
+
     data = result.data or []
     return data[0] if data else {}
 

@@ -17,6 +17,8 @@ create table if not exists public.company_seed_list (
   harvest_version text not null default 'v1',
   captured_at timestamptz not null default now(),
   raw_context jsonb not null default '{}'::jsonb,
+  enrichment_status text
+    check (enrichment_status in ('pending', 'enriched', 'failed', 'skipped')),
   unique (slug, country, sector, harvest_version),
   constraint company_seed_list_country_check check (
     country in (
@@ -38,3 +40,6 @@ create index if not exists company_seed_list_slug_idx
 
 create index if not exists company_seed_list_sector_idx
   on public.company_seed_list (sector);
+
+create index if not exists company_seed_list_status_idx
+  on public.company_seed_list (enrichment_status);
