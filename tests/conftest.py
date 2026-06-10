@@ -11,7 +11,7 @@ def _stub_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SUPABASE_SERVICE_KEY", "test-service-key")
     monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
     monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "false")
-    monkeypatch.setenv("ENRICHMENT_MODEL", "gemini-2.5-pro")
+    monkeypatch.setenv("ENRICHMENT_MODEL", "gemini-2.5-flash")
     monkeypatch.setenv("PROMPT_VERSION", "v3")
     # Reset cached supabase client between tests
     try:

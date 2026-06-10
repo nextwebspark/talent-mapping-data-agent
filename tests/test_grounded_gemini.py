@@ -125,5 +125,5 @@ def test_enrich_company_grounded_wires_call(monkeypatch, sample_enrichment):
     assert out["confidence"] == sample_enrichment["confidence"]
     urls = {s["url"] for s in out["sources"]}
     assert "https://grounded.example/x" in urls
-    assert captured["model"] == "gemini-2.5-pro"
+    assert captured["model"] == "gemini-2.5-flash"
     assert "Emaar" in captured["contents"]

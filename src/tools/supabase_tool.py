@@ -90,18 +90,75 @@ def fetch_unenriched_companies(
         List of {id, company_id, name, slug, country, sector, website, description}.
         `company_id` equals `slug`.
     """
-    client = _client()
-
     if top_company_only:
         log.warning("top_company_only ignored: company_seed_list has no top_company field")
+
+    def _apply_status(q: Any) -> Any:
+        return q.or_("enrichment_status.is.null,enrichment_status.eq.pending")
+
+    return _fetch_seed_rows(_apply_status, limit=limit, country=country, sector=sector)
+
+
+def fetch_failed_companies(
+    limit: int = 50,
+    country: str | None = None,
+    sector: str | None = None,
+    top_company_only: bool = False,
+    prompt_version: str | None = None,
+    max_failures_per_row: int = 3,
+) -> list[dict[str, Any]]:
+    """Return up to `limit` seed-list companies stamped enrichment_status='failed'.
+
+    These are the poison-pill rows (hit the failure threshold) that
+    `fetch_unenriched_companies` deliberately excludes. Used by the
+    `batch-run --retry-failed` sweep — e.g. to re-run failures with a stronger
+    model via ENRICHMENT_MODEL=gemini-2.5-pro. Same dedup-by-slug behavior and
+    return shape as `fetch_unenriched_companies`.
+
+    Args:
+        limit: Max rows.
+        country: Optional country filter (exact match on company_seed_list.country).
+        sector: Optional sector filter (exact match on company_seed_list.sector).
+        top_company_only: Ignored — company_seed_list has no top_company field.
+        prompt_version: Unused — kept for call-site back-compat.
+        max_failures_per_row: Unused — kept for call-site back-compat.
+
+    Returns:
+        List of {id, company_id, name, slug, country, sector, website, description}.
+        `company_id` equals `slug`.
+    """
+    if top_company_only:
+        log.warning("top_company_only ignored: company_seed_list has no top_company field")
+
+    def _apply_status(q: Any) -> Any:
+        return q.eq("enrichment_status", "failed")
+
+    return _fetch_seed_rows(_apply_status, limit=limit, country=country, sector=sector)
+
+
+def _fetch_seed_rows(
+    apply_status: Callable[[Any], Any],
+    *,
+    limit: int,
+    country: str | None,
+    sector: str | None,
+) -> list[dict[str, Any]]:
+    """Page + dedup-by-slug seed rows for a given enrichment_status predicate.
+
+    `apply_status` receives a query builder and returns it with the status
+    filter applied (NULL/pending for the unenriched queue, 'failed' for the
+    retry sweep). Shared by `fetch_unenriched_companies` and
+    `fetch_failed_companies` so the paging/dedup loop lives in one place.
+    """
+    client = _client()
 
     def _make_seed_query() -> Any:
         q = (
             client.table("company_seed_list")
             .select("id, name, slug, country, sector, website, description")
-            .or_("enrichment_status.is.null,enrichment_status.eq.pending")
             .order("id", desc=False)
         )
+        q = apply_status(q)
         if country:
             q = q.eq("country", country)
         if sector:

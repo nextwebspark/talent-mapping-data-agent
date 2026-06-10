@@ -97,7 +97,7 @@ Vector DB is **NOT used yet**. SQL + GIN array indexes handle MVP. When semantic
 - Contact fields (v2+): `website`, `phone`, `email`, `address` (text). LLM-enriched with `sources[]` citation requirement; Pydantic validator flattens dict/list responses to a single string.
 - `confidence`: 0.0–1.0. Downstream queries should filter `>= 0.5` for usable rows.
 - `sources`: JSONB array of `{url, title, snippet}` from Gemini grounding metadata.
-- `model`, `prompt_version`: versioning. Bump `PROMPT_VERSION` in `src/agent/prompts.py` when the prompt or schema changes; old + new versions coexist. **Current: v5** (v5 removed `adjacent_sectors` — now resolved at query time via `ADJACENCY` map).
+- `model`, `prompt_version`: versioning. Bump `PROMPT_VERSION` in `src/agent/prompts.py` when the prompt or schema changes; old + new versions coexist. **Current: v6** (v6 made `revenue_band` always-required: Gemini now estimates a band from proxies — headcount, listing status, sector norms, peers — when no figure is sourced, leaving `revenue_estimate_usd` null and capping confidence at 0.8 for estimated bands; v5 removed `adjacent_sectors` — now resolved at query time via `ADJACENCY` map).
 - `raw_response`: full LLM JSON for audit/debug.
 
 **Failure log table** (`public.company_enrichment_failures`) — defined in [doc/supabase-schema/company_enrichment_failures.sql](doc/supabase-schema/company_enrichment_failures.sql):
@@ -116,6 +116,8 @@ Hard validation: `primary_sector` must be one of `SECTORS`. `sector_mix[].sector
 **Promotion loop**: periodically inspect `company_enrichment.proposed_tags` aggregates. Promote frequent + meaningful candidates by adding them to `SUB_TAGS_BY_SECTOR` and bumping `PROMPT_VERSION`.
 
 ## Enrichment Workflow (current bulk path)
+
+**Model selection (single knob):** the enrichment model is set once via the `ENRICHMENT_MODEL` env var and read through `settings.model` in `src/config.py`. Every code path follows it — the batch runner, `grounded_gemini.py`, the ADK agent (`enrichment_agent.py`), and the Vertex deploy. No model literal exists in `src/`. **Default is `gemini-2.5-flash`** (chosen for cost — ~10x cheaper than Pro, still supports Google Search grounding). To switch the entire pipeline to Pro for high-stakes / `top_company` runs, set `ENRICHMENT_MODEL=gemini-2.5-pro` — no code change. This is the cheap first step toward the two-tier split (Flash classification + Pro grounded firmographics) in "Future architecture" below.
 
 `src/runner/batch_run.py` is a **deterministic workflow**, not an agentic loop. The ADK agent (`enrichment_agent.py`) is reserved for interactive use and Vertex Agent Engine deployment; bulk runs do not use it because LLM-driven orchestration adds cost + nondeterminism without benefit when the per-row work is itself an LLM call.
 
@@ -152,8 +154,8 @@ These were identified but not yet implemented. Do not assume they exist:
 1. **No batch API integration.** Currently every call is real-time grounded. User wants Vertex AI Batch Prediction (~50% cheaper, async) for the bulk classification tier. See "Future architecture" below.
 2. **No Supabase write retry.** `write_enrichment` is not wrapped in tenacity; a transient Supabase 5xx kills the iteration.
 3. **No semantic embeddings.** Plan calls for `pgvector` later; not added yet. Easy `ALTER TABLE` + backfill from `tagline + business_description` when needed.
-4. **No `--company-id` / `--min-confidence` flags.** Cannot target a single company or re-enrich low-confidence rows yet.
-5. **No async / parallel execution.** Single sequential loop. Parallelism deferred until volume justifies it (Cloud Run Job with `--parallelism` or asyncio).
+4. **No `--company-id` / `--min-confidence` flags.** Cannot target a single company or re-enrich low-confidence rows yet. (Failed-batch re-run *does* exist: `--retry-failed` sources the `enrichment_status='failed'` set — used to re-run poison pills on a stronger model. Caveat: a failed row already has ≥3 logged attempts at the same `prompt_version`, so under the default `--max-failures-per-row 3` it gets exactly one Pro attempt before re-locking to `'failed'`. For multiple Pro attempts raise `--max-failures-per-row` since attempts are cumulative across models at one `prompt_version`.)
+5. ~~No async / parallel execution.~~ **DONE.** `batch_run.run()` dispatches per-company enrichment across a `ThreadPoolExecutor` (`--concurrency`, default 5). The bottleneck is blocking grounded-Gemini I/O, so threads give near-linear speedup. Enrichments are written per-thread; failures are written serially in the main thread to avoid the attempt-number race in `write_failure`. `--concurrency 1` reproduces the old strictly-serial behavior. (Full asyncio / Cloud Run `--parallelism` remains an option only if volume outgrows threads.)
 
 Already implemented and working:
 - Failures table + per-attempt logging + poison-pill skip (≥3 attempts → row excluded).
@@ -296,6 +298,11 @@ uv run batch-run --limit 200 --country "United Arab Emirates" --sector "Retail" 
 
 # Verbose logging
 uv run batch-run --limit 10 --log-level DEBUG
+
+# Re-run poison-pill failures (enrichment_status='failed') with Gemini Pro.
+# Model is the single env knob — no code change. --retry-failed swaps the
+# fetch source from the pending queue to the failed set.
+ENRICHMENT_MODEL=gemini-2.5-pro uv run batch-run --retry-failed --limit 500 --concurrency 3
 ```
 
 All CLI flags:
@@ -307,7 +314,9 @@ All CLI flags:
 | `--sector` | none | Exact match on `companies.sector` (the coarse Zawya sector) |
 | `--top-company-only` | false | Only `top_company=true` rows |
 | `--dry-run` | false | Print JSON, do not write DB |
-| `--sleep` | 0.5 | Seconds between Gemini calls |
+| `--retry-failed` | false | Source rows from `enrichment_status='failed'` (poison pills) instead of the pending queue. Pair with `ENRICHMENT_MODEL=gemini-2.5-pro` to re-run failures on Pro. |
+| `--concurrency` | 5 | Companies enriched in parallel (in-flight Gemini calls). `1` = strictly serial. Lower if you hit quota/429. |
+| `--sleep` | 0.5 | Deprecated no-op. Throttling now governed by `--concurrency`. |
 | `--max-failures-per-row` | 3 | Skip companies that already failed ≥ this many times at current prompt_version |
 | `--max-failures-before-stop` | none | Abort whole batch once this many failures have occurred (quota guard) |
 | `--log-level` | INFO | Logging level |

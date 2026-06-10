@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import threading
+import time
+
 import pytest
 
 from runner import batch_run
@@ -63,6 +66,8 @@ def _default_kwargs(**overrides):
         "sleep_s": 0,
         "max_failures_per_row": 3,
         "max_failures_before_stop": None,
+        "concurrency": 1,
+        "retry_failed": False,
     }
     base.update(overrides)
     return base
@@ -76,6 +81,35 @@ def test_run_writes_one_payload_per_company(mock_pipeline):
     assert {p["company_id"] for p in written} == {"z-1", "z-2"}
     assert all(p["prompt_version"] == "v3" for p in written)
     assert failures == []
+
+
+def test_run_parallel_writes_one_payload_per_company(monkeypatch, sample_enrichment):
+    # More rows than workers so the pool actually overlaps work.
+    rows = [
+        {"id": i, "company_id": f"z-{i}", "name": f"Co{i}", "country": "UAE"} for i in range(1, 13)
+    ]
+    monkeypatch.setattr(batch_run, "fetch_unenriched_companies", lambda **kw: rows)
+
+    def slow_enrich(name, **kw):
+        # Tiny sleep to force genuine thread interleaving.
+        time.sleep(0.01)
+        return dict(sample_enrichment)
+
+    monkeypatch.setattr(batch_run, "enrich_company_grounded", slow_enrich)
+
+    lock = threading.Lock()
+    written: list[dict] = []
+
+    def record(payload):
+        with lock:
+            written.append(payload)
+
+    monkeypatch.setattr(batch_run, "write_enrichment", record)
+
+    rc = batch_run.run(**_default_kwargs(concurrency=4))
+    assert rc == 0
+    assert len(written) == len(rows)
+    assert {p["company_id"] for p in written} == {f"z-{i}" for i in range(1, 13)}
 
 
 def test_run_dry_run_does_not_write(mock_pipeline, capsys):
@@ -139,7 +173,9 @@ def test_run_aborts_at_max_failures_before_stop(monkeypatch, sample_enrichment):
     monkeypatch.setattr(
         batch_run,
         "write_failure",
-        lambda row, exc, prompt_version, raw_response=None, max_failures_per_row=3: failures.append(row),
+        lambda row, exc, prompt_version, raw_response=None, max_failures_per_row=3: failures.append(
+            row
+        ),
     )
 
     rc = batch_run.run(**_default_kwargs(max_failures_before_stop=2))
@@ -181,6 +217,25 @@ def test_run_passes_contact_hints_to_enricher(monkeypatch, sample_enrichment):
     assert captured_kwargs["email"] == "info@acme.ae"
     assert captured_kwargs["address"] == "P.O. Box 1234, Dubai"
     assert captured_kwargs["website"] == "https://acme.ae"
+
+
+def test_run_retry_failed_uses_failed_fetch(monkeypatch, sample_enrichment):
+    """--retry-failed sources rows from fetch_failed_companies, not the pending queue."""
+    failed_rows = [
+        {"id": 1, "company_id": "z-1", "name": "Failed Co", "country": "UAE"},
+    ]
+    monkeypatch.setattr(
+        batch_run, "fetch_unenriched_companies", lambda **kw: pytest.fail("should not be called")
+    )
+    monkeypatch.setattr(batch_run, "fetch_failed_companies", lambda **kw: failed_rows)
+    monkeypatch.setattr(batch_run, "enrich_company_grounded", lambda **kw: dict(sample_enrichment))
+
+    written: list[dict] = []
+    monkeypatch.setattr(batch_run, "write_enrichment", lambda p: written.append(p))
+
+    rc = batch_run.run(**_default_kwargs(retry_failed=True))
+    assert rc == 0
+    assert {p["company_id"] for p in written} == {"z-1"}
 
 
 def test_run_passes_filters_through(monkeypatch, sample_enrichment):

@@ -11,6 +11,7 @@ from __future__ import annotations
 from google.adk.agents import Agent
 
 from agent.prompts import PROMPT_VERSION
+from config import load_settings
 from tools.grounded_gemini import enrich_company_grounded
 from tools.supabase_tool import (
     build_enrichment_payload,
@@ -39,7 +40,7 @@ Do not fabricate enrichment values; rely on the tool output."""
 
 root_agent = Agent(
     name="company_enricher",
-    model="gemini-2.5-pro",
+    model=load_settings().model,  # follows ENRICHMENT_MODEL; default gemini-2.5-flash
     description=(
         "Enriches GCC/MENA companies with multi-tag sectors, size band, revenue band, "
         "and tagline using grounded Gemini + Supabase."

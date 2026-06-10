@@ -13,7 +13,15 @@ from agent.taxonomy import SECTORS
 
 
 def test_prompt_version_set():
-    assert PROMPT_VERSION == "v5"
+    assert PROMPT_VERSION == "v6"
+
+
+def test_system_instruction_requires_revenue_band():
+    """v6: prompt must instruct Gemini to always set revenue_band (estimate if unsourced)."""
+    text = system_instruction()
+    assert "MUST always be set" in text
+    assert "Never leave it" in text
+    assert "ESTIMATE the band" in text
 
 
 def test_system_instruction_lists_all_sectors():

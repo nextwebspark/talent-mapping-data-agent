@@ -42,6 +42,6 @@ def load_settings() -> Settings:
         gcp_project=_get("GOOGLE_CLOUD_PROJECT"),
         gcp_location=_get("GOOGLE_CLOUD_LOCATION", "us-central1") or "us-central1",
         gcs_staging_bucket=_get("GCS_STAGING_BUCKET"),
-        model=_get("ENRICHMENT_MODEL", "gemini-2.5-pro") or "gemini-2.5-pro",
+        model=_get("ENRICHMENT_MODEL", "gemini-2.5-flash") or "gemini-2.5-flash",
         prompt_version=_get("PROMPT_VERSION", "v1") or "v1",
     )

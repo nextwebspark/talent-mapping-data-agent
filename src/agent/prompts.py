@@ -17,7 +17,7 @@ from agent.taxonomy import EMPLOYEE_BANDS, REVENUE_BANDS, SECTORS
 
 log = logging.getLogger(__name__)
 
-PROMPT_VERSION = "v5"
+PROMPT_VERSION = "v6"
 
 SECTOR_SET: set[str] = set(SECTORS)
 
@@ -189,8 +189,17 @@ CRITICAL RULES:
 7. `employee_band` must be one of: {emp_bands}. Set `employee_count_estimate`
    only when you found a sourced figure.
 
-8. `revenue_band` must be one of: {rev_bands}. Set `revenue_estimate_usd`
-   only when you found a sourced figure (convert non-USD using a recent rate).
+8. `revenue_band` MUST always be set to one of: {rev_bands}. Never leave it
+   null - revenue band is a required downstream filter.
+   - If you find a sourced revenue figure, pick the matching band and also set
+     `revenue_estimate_usd` (convert non-USD using a recent rate). Cite the
+     source. High confidence.
+   - If no figure is sourced, ESTIMATE the band from available signals:
+     employee headcount / `employee_band`, listed-vs-private status, sector
+     revenue-per-head norms, and known peers of similar size. Leave
+     `revenue_estimate_usd` null in this case.
+   - When the band is estimated rather than sourced, keep overall `confidence`
+     modest (see rule 10) and do NOT cite a revenue source you do not have.
 
 9. `website`, `phone`, `email`, `address`: extract from official company
    website, LinkedIn, or authoritative directory (Crunchbase, Bloomberg,
@@ -203,6 +212,8 @@ CRITICAL RULES:
 
 10. `confidence`: 0.0-1.0. Lower (<0.5) when most fields are null/inferred.
     Higher (>0.8) when bands, sector, and description are all backed by sources.
+    A `revenue_band` you ESTIMATED from proxies (no sourced revenue figure)
+    must not by itself push confidence above 0.8.
 
 11. `sources`: include every URL you relied on for non-trivial facts (revenue,
     headcount, sector classification, contact info, sector_mix weights).

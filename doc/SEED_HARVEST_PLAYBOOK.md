@@ -8,7 +8,7 @@ This playbook is meant to be read at the start of every harvest chat session. Th
 
 - GCC 6 only: `United Arab Emirates`, `Saudi Arabia`, `Qatar`, `Kuwait`, `Bahrain`, `Oman`.
 - Sectors: the 20 entries in [src/agent/taxonomy.py](src/agent/taxonomy.py) `SECTORS`.
-- Target per (sector, country): up to 200 unique company slugs. Realistic ceiling is 50–150 for large sectors, less for niche ones.
+- Target per (sector, country): up to 100 unique company slugs. This is a **ceiling, not a quota** — 50-70 is realistic for large sectors, and many niche-sector × small-country pairs (e.g. a specialized sector in Bahrain or Oman) legitimately top out at 10-20 or fewer. A low honest count is a correct result. Never pad toward the target with remembered or guessed companies (see anti-hallucination guardrails).
 - **Same company can legitimately live in multiple sectors.** The unique key is `(slug, country, sector, harvest_version)`, so the same `slug` appearing under e.g. `Banking & Financial Services` *and* `Capital Markets & Asset Management` produces two rows and is correct. Do not try to dedup across sectors in your buffer. Dedup only against `fetch_seed_slugs(country, sector)` for the **current** sector being harvested.
 
 ## Invocation
@@ -25,7 +25,7 @@ Start a fresh Claude Code chat and prompt, e.g.:
 4. **Verify before buffering.** Only buffer a candidate if its name was literally returned by a `WebFetch` (or appeared in a `WebSearch` snippet) in this session. Cross-check the name back to the result text. Drop anything you cannot point to a quote for.
 5. **Normalise.** Compute `slug = slugify(name)` (use [src/tools/supabase_tool.py:slugify](src/tools/supabase_tool.py)). Drop if `slug in seen_slugs`. Otherwise add to `seen_slugs` and a batch buffer.
 6. **Persist.** Every 20 rows in the buffer, call `write_seed_companies(batch)`. Drain the buffer on stop conditions too.
-7. **Stop** when any of: `len(seen_slugs) >= 200`, **or** 3 consecutive search queries yield <5 net-new slugs, **or** the token budget for the session is approaching its limit.
+7. **Stop** when any of: `len(seen_slugs) >= 100` (the ceiling — see Scope), **or** 3 consecutive search queries each yield <5 net-new slugs (the sector is hard / thin in this country — accept the current count and stop; do not invent rows to reach the target), **or** the token budget for the session is approaching its limit.
 
 ### Anti-hallucination guardrails (re-read every session)
 
@@ -88,8 +88,8 @@ For sector-specific seed phrasing also try synonyms:
 
 ## Stop conditions
 
-- 200 unique slugs reached.
-- 3 consecutive WebSearch calls yielded <5 net-new slugs.
+- 100 unique slugs reached (the ceiling).
+- The sector is hard in this country: after working through ~3-4 query templates, 3 consecutive WebSearch calls each yield <5 net-new slugs. Treat this as the signal to **settle on the current low count and stop** — do not keep grinding templates or fabricate rows to approach the target. A pair that ends at 10-20 (or fewer) verified slugs is a success, not a failure.
 - The session has used a noticeable share of its token budget — flush the buffer and stop rather than enter another long fetch cycle.
 
 ## Write cadence
@@ -102,6 +102,7 @@ Report back to the user:
 - Pair (sector, country) harvested.
 - New rows written this session, total slugs now in the table.
 - Sources that produced most rows (helps tune allowlist).
+- If the pair settled below the realistic ceiling because the sector is thin in this country, say so explicitly: mark it **hard / intentionally low** and note the count is final-for-now, not a failed run. This prevents future sessions from re-grinding the same dry pair.
 - Suggested adjacent (sector, country) pair to run next.
 
 SQL to verify:

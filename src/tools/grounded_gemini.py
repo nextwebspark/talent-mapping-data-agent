@@ -40,6 +40,14 @@ log = logging.getLogger(__name__)
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*\})\s*```", re.DOTALL)
 
 
+class EmptyModelResponseError(RuntimeError):
+    """Gemini returned no usable text (empty/blocked/truncated). Transient — retry.
+
+    Deliberately a RuntimeError (not ValueError) so it is NOT in the
+    `retry_if_not_exception_type` exclusion list and therefore gets retried.
+    """
+
+
 def _client() -> Client:
     s = load_settings()
     if s.use_vertex_ai:
